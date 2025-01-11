@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent360
+  labels:
+    name: agent360
+    environment: production

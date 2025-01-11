@@ -1,0 +1,148 @@
+openapi: 3.0.0
+info:
+  title: Agent360 API
+  description: Enterprise-grade agent infrastructure API
+  version: 1.0.0
+  contact:
+    name: Agent360 Team
+    email: support@agent360.com
+
+servers:
+  - url: https://api.agent360.example.com/v1
+    description: Production server
+  - url: http://localhost:8000/v1
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    AgentRequest:
+      type: object
+      required:
+        - input
+      properties:
+        input:
+          type: object
+          required:
+            - query
+          properties:
+            query:
+              type: string
+              description: The query to process
+            tools:
+              type: array
+              items:
+                type: string
+              description: List of tools to use
+        timeout:
+          type: integer
+          default: 300
+          description: Request timeout in seconds
+
+    AgentResponse:
+      type: object
+      properties:
+        output:
+          type: object
+          description: Agent output
+        execution_time:
+          type: number
+          format: float
+          description: Execution time in seconds
+        tool_usage:
+          type: object
+          description: Tool usage statistics
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+
+paths:
+  /agent/execute:
+    post:
+      summary: Execute agent task
+      description: Process a query using the agent
+      operationId: executeAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRequest'
+      responses:
+        '200':
+          description: Successful execution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Server error
+
+  /agent/tools:
+    get:
+      summary: List available tools
+      description: Get list of available tools and their metadata
+      operationId: listTools
+      responses:
+        '200':
+          description: List of tools
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    version:
+                      type: string
+        '401':
+          description: Unauthorized
+        '500':
+          description: Server error
+
+  /health:
+    get:
+      summary: Health check
+      description: Check system health
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time

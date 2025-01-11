@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-scripts
+  namespace: agent360
+data:
+  backup.sh: |
+    #!/bin/bash
+    # Backup script for Agent360
+    
+    # Set variables
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_DIR="/backups"
+    
+    # Backup Cassandra
+    echo "Starting Cassandra backup..."
+    nodetool snapshot agent360 -t backup_${TIMESTAMP}
+    
+    # Backup Redis
+    echo "Starting Redis backup..."
+    redis-cli save
+    cp /data/dump.rdb ${BACKUP_DIR}/redis_${TIMESTAMP}.rdb
+    
+    # Backup Temporal
+    echo "Starting Temporal backup..."
+    temporal admin cluster backup start \
+      --filename ${BACKUP_DIR}/temporal_${TIMESTAMP}.backup
+    
+    echo "Backup completed successfully"
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agent360-backup
+  namespace: agent360
+spec:
+  schedule: "0 1 * * *"  # Daily at 1 AM
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: agent360-backup:latest
+            command: ["/scripts/backup.sh"]
+            volumeMounts:
+            - name: backup-scripts
+              mountPath: /scripts
+            - name: backup-volume
+              mountPath: /backups
+            env:
+            - name: CASSANDRA_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: agent360-config
+                  key: cassandra_hosts
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: agent360-config
+                  key: redis_host
+          volumes:
+          - name: backup-scripts
+            configMap:
+              name: backup-scripts
+              defaultMode: 0755
+          - name: backup-volume
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          restartPolicy: OnFailure
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+  namespace: agent360
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: standard
