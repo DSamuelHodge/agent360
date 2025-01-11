@@ -1,0 +1,160 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kong-config
+  namespace: agent360
+data:
+  kong.yaml: |
+    _format_version: "3.0"
+    _transform: true
+
+    services:
+      - name: agent-service
+        url: http://agent360-service:8000
+        routes:
+          - name: agent-api
+            paths:
+              - /api/v1/agent
+            strip_path: true
+            methods:
+              - GET
+              - POST
+            plugins:
+              - name: rate-limiting
+                config:
+                  minute: 60
+                  policy: redis
+                  redis_host: redis
+                  redis_port: 6379
+                  redis_database: 0
+              - name: jwt
+                config:
+                  key_claim_name: kid
+                  claims_to_verify:
+                    - exp
+                  maximum_expiration: 3600
+              - name: cors
+                config:
+                  origins:
+                    - "*"
+                  methods:
+                    - GET
+                    - POST
+                    - PUT
+                    - DELETE
+                  headers:
+                    - Authorization
+                    - Content-Type
+                  exposed_headers:
+                    - X-Auth-Token
+                  credentials: true
+                  max_age: 3600
+              - name: prometheus
+                config:
+                  status_codes: true
+                  latency: true
+                  bandwidth: true
+                  upstream_health: true
+              - name: request-transformer
+                config:
+                  add:
+                    headers:
+                      - X-Request-ID:$(uuid)
+              - name: response-transformer
+                config:
+                  add:
+                    headers:
+                      - X-Kong-Response-Time:$(request_time)
+              - name: file-log
+                config:
+                  path: /var/log/kong/access.log
+                  reopen: true
+              - name: zipkin
+                config:
+                  http_endpoint: http://jaeger-collector:9411/api/v2/spans
+                  sample_ratio: 1.0
+                  traceid_byte_count: 16
+
+      - name: tools-service
+        url: http://agent360-tools-service:8000
+        routes:
+          - name: tools-api
+            paths:
+              - /api/v1/tools
+            strip_path: true
+            methods:
+              - GET
+              - POST
+            plugins:
+              - name: oauth2
+                config:
+                  scopes:
+                    - tools:read
+                    - tools:write
+                  mandatory_scope: true
+                  token_expiration: 7200
+                  enable_authorization_code: true
+                  enable_client_credentials: true
+                  accept_http_if_already_terminated: true
+              - name: acl
+                config:
+                  allow:
+                    - tools-group
+              - name: rate-limiting
+                config:
+                  minute: 30
+                  policy: redis
+              - name: prometheus
+              - name: zipkin
+
+    consumers:
+      - username: agent360-client
+        jwt_secrets:
+          - algorithm: RS256
+            key: "agent360-key"
+            rsa_public_key: |
+              -----BEGIN PUBLIC KEY-----
+              # Add your public key here
+              -----END PUBLIC KEY-----
+        acls:
+          - group: tools-group
+        oauth2_credentials:
+          - name: agent360-oauth
+            client_id: agent360-client
+            client_secret: your-client-secret
+            redirect_uris:
+              - https://agent360.example.com/oauth/callback
+
+    plugins:
+      - name: ip-restriction
+        config:
+          allow:
+            - 0.0.0.0/0
+      - name: proxy-cache
+        config:
+          content_type:
+            - text/plain
+            - application/json
+          cache_ttl: 300
+          strategy: memory
+      - name: response-ratelimiting
+        config:
+          limits:
+            sockets:
+              minute: 10
+            connections:
+              minute: 100
+      - name: bot-detection
+        config:
+          allow:
+            - regex: "^Mozilla.*"
+      - name: correlation-id
+        config:
+          header_name: X-Correlation-ID
+          generator: uuid
+          echo_downstream: true
+      - name: circuit-breaker
+        config:
+          timeout: 10000
+          failures: 5
+          reset_timeout: 60000

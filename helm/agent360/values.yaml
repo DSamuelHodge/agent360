@@ -91,3 +91,83 @@ config:
   agent:
     maxConcurrentTasks: 100
     defaultTimeoutSeconds: 300
+
+kong:
+  enabled: true
+  replicaCount: 3
+  
+  image:
+    repository: kong
+    tag: "3.4"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+  
+  service:
+    type: LoadBalancer
+  
+  env:
+    - name: KONG_PLUGINS
+      value: bundled,jwt,oauth2,cors,prometheus,zipkin,rate-limiting,request-transformer,response-transformer,circuit-breaker
+  
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8100"
+  
+  config:
+    redis:
+      host: redis
+      port: 6379
+      database: 0
+    
+    jwt:
+      key_claim_name: kid
+      claims_to_verify:
+        - exp
+      maximum_expiration: 3600
+    
+    oauth2:
+      scopes:
+        - tools:read
+        - tools:write
+      token_expiration: 7200
+      enable_authorization_code: true
+      enable_client_credentials: true
+    
+    rateLimit:
+      agent_api:
+        minute: 60
+      tools_api:
+        minute: 30
+    
+    cors:
+      origins:
+        - "*"
+      methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+      headers:
+        - Authorization
+        - Content-Type
+      exposed_headers:
+        - X-Auth-Token
+      credentials: true
+      max_age: 3600
+    
+    tracing:
+      enabled: true
+      endpoint: http://jaeger-collector:9411/api/v2/spans
+      sample_ratio: 1.0
+    
+    circuitBreaker:
+      timeout: 10000
+      failures: 5
+      reset_timeout: 60000

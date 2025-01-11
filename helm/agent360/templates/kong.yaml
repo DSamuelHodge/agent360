@@ -1,0 +1,137 @@
+{{- if .Values.kong.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent360.fullname" . }}-kong
+  labels:
+    {{- include "agent360.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kong
+spec:
+  replicas: {{ .Values.kong.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agent360.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: kong
+  template:
+    metadata:
+      labels:
+        {{- include "agent360.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: kong
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8100"
+        {{- with .Values.kong.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.kong.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: kong
+          image: "{{ .Values.kong.image.repository }}:{{ .Values.kong.image.tag }}"
+          imagePullPolicy: {{ .Values.kong.image.pullPolicy }}
+          ports:
+            - name: proxy
+              containerPort: 8000
+            - name: proxy-ssl
+              containerPort: 8443
+            - name: admin
+              containerPort: 8001
+            - name: admin-ssl
+              containerPort: 8444
+            - name: metrics
+              containerPort: 8100
+          env:
+            - name: KONG_DATABASE
+              value: "off"
+            - name: KONG_DECLARATIVE_CONFIG
+              value: /kong/config/kong.yaml
+            - name: KONG_PROXY_ACCESS_LOG
+              value: /dev/stdout
+            - name: KONG_ADMIN_ACCESS_LOG
+              value: /dev/stdout
+            - name: KONG_PROXY_ERROR_LOG
+              value: /dev/stderr
+            - name: KONG_ADMIN_ERROR_LOG
+              value: /dev/stderr
+            - name: KONG_ADMIN_LISTEN
+              value: "0.0.0.0:8001"
+            - name: KONG_PROXY_LISTEN
+              value: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+            {{- with .Values.kong.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.kong.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: 8001
+            initialDelaySeconds: 30
+            timeoutSeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: 8001
+            initialDelaySeconds: 30
+            timeoutSeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: kong-config
+              mountPath: /kong/config
+      volumes:
+        - name: kong-config
+          configMap:
+            name: {{ include "agent360.fullname" . }}-kong-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agent360.fullname" . }}-kong-proxy
+  labels:
+    {{- include "agent360.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kong
+spec:
+  type: {{ .Values.kong.service.type }}
+  ports:
+    - name: proxy
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+    - name: proxy-ssl
+      port: 443
+      targetPort: 8443
+      protocol: TCP
+  selector:
+    {{- include "agent360.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kong
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agent360.fullname" . }}-kong-admin
+  labels:
+    {{- include "agent360.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kong
+spec:
+  type: ClusterIP
+  ports:
+    - name: admin
+      port: 8001
+      targetPort: 8001
+      protocol: TCP
+    - name: admin-ssl
+      port: 8444
+      targetPort: 8444
+      protocol: TCP
+    - name: metrics
+      port: 8100
+      targetPort: 8100
+      protocol: TCP
+  selector:
+    {{- include "agent360.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kong
+{{- end }}
