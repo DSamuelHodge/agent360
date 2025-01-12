@@ -1,0 +1,250 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-redis
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: {{ .Release.Name }}-redis
+  replicas: {{ .Values.redis.replicas | default 3 }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-redis
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-redis
+    spec:
+      containers:
+        - name: redis
+          image: "redis:7.2-alpine"
+          command: ["redis-server"]
+          args:
+            - "/etc/redis/redis.conf"
+            - "--protected-mode"
+            - "no"
+          ports:
+            - containerPort: 6379
+              name: redis
+          resources:
+            requests:
+              cpu: {{ .Values.redis.resources.requests.cpu | default "100m" }}
+              memory: {{ .Values.redis.resources.requests.memory | default "256Mi" }}
+            limits:
+              cpu: {{ .Values.redis.resources.limits.cpu | default "500m" }}
+              memory: {{ .Values.redis.resources.limits.memory | default "512Mi" }}
+          volumeMounts:
+            - name: redis-config
+              mountPath: /etc/redis
+            - name: redis-data
+              mountPath: /data
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: redis-config
+          configMap:
+            name: {{ .Release.Name }}-redis-config
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.redis.storageClass | default "standard" }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.storage | default "10Gi" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-redis-config
+  namespace: {{ .Release.Namespace }}
+data:
+  redis.conf: |
+    # Redis configuration
+    appendonly yes
+    maxmemory {{ .Values.redis.maxMemory | default "400mb" }}
+    maxmemory-policy allkeys-lru
+    save 900 1
+    save 300 10
+    save 60 10000
+    rdbcompression yes
+    rdbchecksum yes
+    # Replication
+    replicaof {{ if .Values.redis.replication.enabled }}{{ .Release.Name }}-redis-0.{{ .Release.Name }}-redis.{{ .Release.Namespace }}.svc.cluster.local 6379{{ end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-redis
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: {{ .Release.Name }}-redis
+  ports:
+    - port: 6379
+      targetPort: redis
+  clusterIP: None
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-redis
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-redis
+  endpoints:
+    - port: redis
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-redis-alerts
+  namespace: {{ .Release.Namespace }}
+spec:
+  groups:
+    - name: redis.rules
+      rules:
+        - alert: RedisDown
+          expr: redis_up == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Redis instance is down
+            description: Redis instance has been down for more than 5 minutes
+            
+        - alert: RedisHighMemoryUsage
+          expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 90
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: High Redis memory usage
+            description: Redis memory usage is above 90%
+            
+        - alert: RedisHighCPUUsage
+          expr: rate(redis_cpu_sys_seconds_total[5m]) > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: High Redis CPU usage
+            description: Redis CPU usage is above 80%
+            
+        - alert: RedisHighConnections
+          expr: redis_connected_clients > 1000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: High number of connections
+            description: Redis has more than 1000 connected clients
+---
+apiVersion: grafana.integreatly.org/v1alpha1
+kind: GrafanaDashboard
+metadata:
+  name: {{ .Release.Name }}-redis
+  namespace: {{ .Release.Namespace }}
+spec:
+  json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": true,
+      "gnetId": null,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "Memory Usage",
+          "type": "gauge",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "redis_memory_used_bytes / redis_memory_max_bytes * 100",
+              "legendFormat": "Memory Usage %"
+            }
+          ],
+          "options": {
+            "maxValue": 100,
+            "minValue": 0,
+            "thresholds": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        },
+        {
+          "title": "Operations Rate",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "rate(redis_commands_total[5m])",
+              "legendFormat": "Commands/sec"
+            }
+          ]
+        },
+        {
+          "title": "Connected Clients",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "redis_connected_clients",
+              "legendFormat": "Clients"
+            }
+          ]
+        },
+        {
+          "title": "Hit Rate",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "rate(redis_keyspace_hits_total[5m]) / (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m]))",
+              "legendFormat": "Hit Rate"
+            }
+          ]
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 16,
+      "style": "dark",
+      "tags": ["redis", "cache"],
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "timepicker": {
+        "refresh_intervals": [
+          "5s",
+          "10s",
+          "30s",
+          "1m",
+          "5m",
+          "15m",
+          "30m",
+          "1h",
+          "2h",
+          "1d"
+        ]
+      },
+      "timezone": "browser",
+      "title": "Redis Metrics",
+      "version": 0
+    }

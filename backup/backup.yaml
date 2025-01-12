@@ -1,3 +1,163 @@
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: agent360-daily-backup
+  namespace: velero
+spec:
+  schedule: "0 1 * * *"  # Daily at 1 AM
+  template:
+    hooks:
+      resources:
+        - name: cassandra-backup-hook
+          includedNamespaces:
+            - agent360
+          labelSelector:
+            matchLabels:
+              app: cassandra
+          pre:
+            - exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - "nodetool flush && nodetool snapshot"
+          post:
+            - exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - "nodetool clearsnapshot"
+        - name: redis-backup-hook
+          includedNamespaces:
+            - agent360
+          labelSelector:
+            matchLabels:
+              app: redis
+          pre:
+            - exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - "redis-cli SAVE"
+    includedNamespaces:
+      - agent360
+    excludedResources:
+      - events
+    storageLocation: default
+    volumeSnapshotLocations:
+      - default
+    ttl: 720h  # 30 days retention
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: agent360-hourly-backup
+  namespace: velero
+spec:
+  schedule: "0 * * * *"  # Every hour
+  template:
+    hooks:
+      resources:
+        - name: cassandra-backup-hook
+          includedNamespaces:
+            - agent360
+          labelSelector:
+            matchLabels:
+              app: cassandra
+          pre:
+            - exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - "nodetool flush"
+    includedNamespaces:
+      - agent360
+    includedResources:
+      - persistentvolumeclaims
+      - persistentvolumes
+    storageLocation: default
+    volumeSnapshotLocations:
+      - default
+    ttl: 48h  # 2 days retention for hourly backups
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-restore-scripts
+  namespace: agent360
+data:
+  pre-restore.sh: |
+    #!/bin/bash
+    # Pre-restore validation
+    echo "Validating restore prerequisites..."
+    
+    # Check cluster health
+    if ! nodetool status | grep "UN"; then
+      echo "Cassandra cluster is not healthy"
+      exit 1
+    fi
+    
+    # Check disk space
+    if [ $(df -h | awk '$NF=="/data"{print $5}' | sed 's/%//') -gt 80 ]; then
+      echo "Insufficient disk space"
+      exit 1
+    fi
+    
+  post-restore.sh: |
+    #!/bin/bash
+    # Post-restore validation
+    echo "Validating restored data..."
+    
+    # Verify Cassandra
+    if ! nodetool verify; then
+      echo "Cassandra data verification failed"
+      exit 1
+    fi
+    
+    # Verify Redis
+    if ! redis-cli PING; then
+      echo "Redis connectivity check failed"
+      exit 1
+    fi
+    
+    # Rebuild indexes
+    echo "Rebuilding indexes..."
+    nodetool rebuild_index
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-validation
+  namespace: agent360
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: backup-validator
+              image: backup-tools:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # Validate latest backup
+                  velero backup describe $(velero backup get --output json | jq -r '.items[0].metadata.name')
+                  
+                  # Check backup size
+                  if [ $(velero backup get --output json | jq '.items[0].status.volumeSnapshotsInfo[0].size' -r) -gt 1000000000000 ]; then
+                    echo "Backup size exceeds 1TB threshold"
+                    exit 1
+                  fi
+                  
+                  # Verify backup integrity
+                  velero backup logs $(velero backup get --output json | jq -r '.items[0].metadata.name') | grep -i error
+                  if [ $? -eq 0 ]; then
+                    echo "Backup contains errors"
+                    exit 1
+                  fi
+          restartPolicy: OnFailure
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,7 +187,6 @@ data:
       --filename ${BACKUP_DIR}/temporal_${TIMESTAMP}.backup
     
     echo "Backup completed successfully"
-
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -72,7 +231,6 @@ spec:
             persistentVolumeClaim:
               claimName: backup-pvc
           restartPolicy: OnFailure
-
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

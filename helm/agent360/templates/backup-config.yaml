@@ -1,0 +1,97 @@
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: {{ .Release.Name }}-backup-location
+  namespace: {{ .Release.Namespace }}
+spec:
+  provider: aws
+  objectStorage:
+    bucket: {{ .Values.backup.bucket }}
+    prefix: {{ .Release.Name }}
+  config:
+    region: {{ .Values.backup.region }}
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: {{ .Release.Name }}-daily-backup
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: "0 1 * * *"  # Daily at 1 AM
+  template:
+    includedNamespaces:
+      - {{ .Release.Namespace }}
+    includedResources:
+      - persistentvolumeclaims
+      - persistentvolumes
+      - secrets
+      - configmaps
+    hooks:
+      resources:
+        - name: cassandra-backup
+          includedNamespaces:
+            - {{ .Release.Namespace }}
+          labelSelector:
+            matchLabels:
+              app: {{ .Release.Name }}-cassandra
+          pre:
+            - exec:
+                container: cassandra
+                command:
+                  - /bin/sh
+                  - -c
+                  - "nodetool flush"
+        - name: redis-backup
+          includedNamespaces:
+            - {{ .Release.Namespace }}
+          labelSelector:
+            matchLabels:
+              app: {{ .Release.Name }}-redis
+          pre:
+            - exec:
+                container: redis
+                command:
+                  - /bin/sh
+                  - -c
+                  - "redis-cli save"
+    storageLocation: {{ .Release.Name }}-backup-location
+    volumeSnapshotLocations:
+      - {{ .Values.backup.region }}
+---
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: {{ .Release.Name }}-restore
+  namespace: {{ .Release.Namespace }}
+spec:
+  backupName: {{ .Release.Name }}-daily-backup
+  includedNamespaces:
+    - {{ .Release.Namespace }}
+  hooks:
+    resources:
+      - name: cassandra-restore
+        includedNamespaces:
+          - {{ .Release.Namespace }}
+        labelSelector:
+          matchLabels:
+            app: {{ .Release.Name }}-cassandra
+        post:
+          - exec:
+              container: cassandra
+              command:
+                - /bin/sh
+                - -c
+                - "nodetool repair"
+      - name: redis-restore
+        includedNamespaces:
+          - {{ .Release.Namespace }}
+        labelSelector:
+          matchLabels:
+            app: {{ .Release.Name }}-redis
+        post:
+          - exec:
+              container: redis
+              command:
+                - /bin/sh
+                - -c
+                - "redis-cli flushall && redis-cli config rewrite"

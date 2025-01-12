@@ -1,0 +1,45 @@
+apiVersion: redpanda.vectorized.io/v1alpha1
+kind: Cluster
+metadata:
+  name: {{ .Release.Name }}-redpanda
+  namespace: {{ .Release.Namespace }}
+spec:
+  image: "vectorized/redpanda:latest"
+  replicas: {{ .Values.redpanda.replicas | default 3 }}
+  version: "v21.11.1"
+  resources:
+    requests:
+      cpu: "1"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+  configuration:
+    rpcServer:
+      port: 33145
+    kafkaApi:
+      - port: 9092
+    adminApi:
+      - port: 9644
+    developerMode: false
+    redpandaArgs:
+      - "--memory=1G"
+      - "--reserve-memory=0M"
+      - "--smp=1"
+      - "--default-log-level=info"
+  storage:
+    capacity: "10Gi"
+    storageClassName: "standard"
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-redpanda
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-redpanda
+  endpoints:
+    - port: admin
+      interval: 15s

@@ -1,0 +1,182 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-circuit-breaker
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ .Release.Name }}-api
+  http:
+    - route:
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: v1
+      retries:
+        attempts: 3
+        perTryTimeout: 2s
+        retryOn: gateway-error,connect-failure,refused-stream
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: {{ .Release.Name }}-circuit-breaker
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: {{ .Release.Name }}-api
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http2MaxRequests: 1000
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-canary
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ .Release.Name }}-api
+  http:
+    - match:
+        - headers:
+            x-env:
+              exact: canary
+      route:
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: canary
+          weight: 100
+    - route:
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: stable
+          weight: 90
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: canary
+          weight: 10
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: {{ .Release.Name }}-canary
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: {{ .Release.Name }}-api
+  subsets:
+    - name: stable
+      labels:
+        version: stable
+    - name: canary
+      labels:
+        version: canary
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-fault-injection
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ .Release.Name }}-api
+  http:
+    - fault:
+        delay:
+          percentage:
+            value: 5
+          fixedDelay: 2s
+        abort:
+          percentage:
+            value: 1
+          httpStatus: 500
+      route:
+        - destination:
+            host: {{ .Release.Name }}-api
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: {{ .Release.Name }}-mtls
+  namespace: {{ .Release.Namespace }}
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: {{ .Release.Name }}-external-apis
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - api.openai.com
+    - api.github.com
+  ports:
+    - number: 443
+      name: https
+      protocol: HTTPS
+  resolution: DNS
+  location: MESH_EXTERNAL
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Sidecar
+metadata:
+  name: {{ .Release.Name }}-sidecar
+  namespace: {{ .Release.Namespace }}
+spec:
+  workloadSelector:
+    labels:
+      app: {{ .Release.Name }}-api
+  ingress:
+    - port:
+        number: 8080
+        protocol: HTTP
+        name: http
+    - port:
+        number: 9090
+        protocol: HTTP
+        name: metrics
+  egress:
+    - hosts:
+        - "./*"
+        - "istio-system/*"
+        - "monitoring/*"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: {{ .Release.Name }}-retry-budget
+  namespace: {{ .Release.Namespace }}
+spec:
+  workloadSelector:
+    labels:
+      app: {{ .Release.Name }}-api
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_OUTBOUND
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: MERGE
+        value:
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.retry.v3.Retry
+            retry_budget:
+              budget_percent:
+                value: 20
+              min_retry_concurrency: 10

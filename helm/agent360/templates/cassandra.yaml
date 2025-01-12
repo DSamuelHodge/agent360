@@ -1,0 +1,283 @@
+apiVersion: cassandra.datastax.com/v1beta1
+kind: CassandraDatacenter
+metadata:
+  name: {{ .Release.Name }}-dc1
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterName: {{ .Release.Name }}-cluster
+  serverType: cassandra
+  serverVersion: "4.0.1"
+  managementApiAuth:
+    insecure: {}
+  size: {{ .Values.cassandra.size | default 3 }}
+  storageConfig:
+    cassandraDataVolumeClaimSpec:
+      storageClassName: {{ .Values.cassandra.storageClass | default "standard" }}
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: {{ .Values.cassandra.storage | default "100Gi" }}
+  resources:
+    requests:
+      memory: {{ .Values.cassandra.resources.requests.memory | default "4Gi" }}
+      cpu: {{ .Values.cassandra.resources.requests.cpu | default "2" }}
+    limits:
+      memory: {{ .Values.cassandra.resources.limits.memory | default "8Gi" }}
+      cpu: {{ .Values.cassandra.resources.limits.cpu | default "4" }}
+  racks:
+    - name: rack1
+  config:
+    cassandra-yaml:
+      num_tokens: 256
+      authenticator: PasswordAuthenticator
+      authorizer: CassandraAuthorizer
+      role_manager: CassandraRoleManager
+    jvm-options:
+      initial_heap_size: "2G"
+      max_heap_size: "2G"
+      additional-jvm-opts:
+        - "-XX:+UseG1GC"
+        - "-XX:+ParallelRefProcEnabled"
+        - "-XX:MaxGCPauseMillis=200"
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-cassandra
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      cassandra.datastax.com/cluster: {{ .Release.Name }}-cluster
+  endpoints:
+    - port: prometheus
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-cassandra-alerts
+  namespace: {{ .Release.Namespace }}
+spec:
+  groups:
+    - name: cassandra.rules
+      rules:
+        - alert: CassandraNodeDown
+          expr: up{job="cassandra"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Cassandra node is down
+            description: Cassandra node has been down for more than 5 minutes
+            
+        - alert: CassandraHighLatency
+          expr: |
+            histogram_quantile(0.95, sum(rate(cassandra_query_latency_seconds_bucket[5m])) by (le, operation)) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: High Cassandra latency
+            description: 95th percentile latency is above 500ms for operation {{ $labels.operation }}
+            
+        - alert: CassandraHighErrorRate
+          expr: |
+            sum(rate(cassandra_errors_total[5m])) by (type) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: High Cassandra error rate
+            description: Error rate is above 0.1 errors/second for type {{ $labels.type }}
+
+        - alert: CassandraLowDiskSpace
+          expr: |
+            cassandra_disk_free_bytes / cassandra_disk_total_bytes < 0.2
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Low disk space
+            description: Cassandra node has less than 20% free disk space
+
+        - alert: CassandraHighGCTime
+          expr: |
+            rate(cassandra_gc_time_seconds_total[5m]) > 0.1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: High GC time
+            description: Cassandra node is spending more than 10% time in GC
+
+        - alert: CassandraHighCompactionBacklog
+          expr: |
+            cassandra_compaction_pending_tasks > 100
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: High compaction backlog
+            description: Cassandra has more than 100 pending compaction tasks
+
+        - alert: CassandraHighRepairBacklog
+          expr: |
+            cassandra_repair_pending_tasks > 50
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: High repair backlog
+            description: Cassandra has more than 50 pending repair tasks
+
+        - alert: CassandraConnectionThrottling
+          expr: |
+            rate(cassandra_connection_throttled_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Connection throttling detected
+            description: Cassandra is throttling client connections
+
+---
+apiVersion: grafana.integreatly.org/v1alpha1
+kind: GrafanaDashboard
+metadata:
+  name: {{ .Release.Name }}-cassandra
+  namespace: {{ .Release.Namespace }}
+spec:
+  json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": true,
+      "gnetId": null,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "Query Latency",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(cassandra_query_latency_seconds_bucket[5m])) by (le, operation))",
+              "legendFormat": "{{operation}} - p95"
+            }
+          ]
+        },
+        {
+          "title": "Query Rate",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "sum(rate(cassandra_queries_total[5m])) by (operation)",
+              "legendFormat": "{{operation}}"
+            }
+          ]
+        },
+        {
+          "title": "Error Rate",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "sum(rate(cassandra_errors_total[5m])) by (type)",
+              "legendFormat": "{{type}}"
+            }
+          ]
+        },
+        {
+          "title": "Disk Usage",
+          "type": "gauge",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "1 - (cassandra_disk_free_bytes / cassandra_disk_total_bytes)",
+              "legendFormat": "Disk Usage %"
+            }
+          ],
+          "options": {
+            "maxValue": 1,
+            "minValue": 0,
+            "thresholds": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "red", "value": 0.9 }
+            ]
+          }
+        },
+        {
+          "title": "GC Time",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "rate(cassandra_gc_time_seconds_total[5m])",
+              "legendFormat": "GC Time"
+            }
+          ]
+        },
+        {
+          "title": "Compaction and Repair Tasks",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "cassandra_compaction_pending_tasks",
+              "legendFormat": "Pending Compactions"
+            },
+            {
+              "expr": "cassandra_repair_pending_tasks",
+              "legendFormat": "Pending Repairs"
+            }
+          ]
+        },
+        {
+          "title": "Connection Stats",
+          "type": "stat",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "cassandra_connected_clients",
+              "legendFormat": "Connected Clients"
+            },
+            {
+              "expr": "rate(cassandra_connection_throttled_total[5m])",
+              "legendFormat": "Throttled Connections/sec"
+            }
+          ]
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 16,
+      "style": "dark",
+      "tags": ["cassandra", "database"],
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "timepicker": {
+        "refresh_intervals": [
+          "5s",
+          "10s",
+          "30s",
+          "1m",
+          "5m",
+          "15m",
+          "30m",
+          "1h",
+          "2h",
+          "1d"
+        ]
+      },
+      "timezone": "browser",
+      "title": "Cassandra Metrics",
+      "version": 0
+    }

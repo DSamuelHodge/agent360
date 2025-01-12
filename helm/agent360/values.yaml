@@ -21,29 +21,51 @@ ingress:
         - path: /
           pathType: Prefix
 
-resources:
-  requests:
-    cpu: 500m
-    memory: 1Gi
-  limits:
-    cpu: 2
-    memory: 4Gi
+environment: production
 
-autoscaling:
-  enabled: true
-  minReplicas: 3
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 80
-  targetMemoryUtilizationPercentage: 80
+tls:
+  secretName: agent360-tls
 
-monitoring:
+api:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2
+      memory: 4Gi
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 80
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: 80
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+redis:
   enabled: true
-  serviceMonitor:
+  architecture: replication
+  auth:
     enabled: true
-    interval: 15s
+  master:
+    persistence:
+      size: 20Gi
+  replica:
+    replicaCount: 2
+    persistence:
+      size: 20Gi
 
 cassandra:
   enabled: true
+  cluster:
+    name: agent360
+    replicaCount: 3
   persistence:
     size: 100Gi
   resources:
@@ -54,19 +76,29 @@ cassandra:
       memory: 8Gi
       cpu: 4
 
-redis:
-  enabled: true
-  architecture: replication
-  auth:
-    enabled: true
-  master:
-    persistence:
-      size: 10Gi
+redpanda:
+  replicas: 3
+  storage:
+    size: 50Gi
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 1
+    limits:
+      memory: 4Gi
+      cpu: 2
 
 temporal:
   enabled: true
   server:
     replicaCount: 3
+  persistence:
+    enabled: true
+    size: 50Gi
+  elasticsearch:
+    enabled: true
+  metrics:
+    enabled: true
   cassandra:
     enabled: false
     external:
@@ -79,28 +111,23 @@ temporal:
     serviceMonitor:
       enabled: true
 
-config:
-  environment: production
-  logging:
-    level: INFO
-    format: json
-  monitoring:
-    prometheus:
-      enabled: true
-      port: 8000
-  agent:
-    maxConcurrentTasks: 100
-    defaultTimeoutSeconds: 300
-
 kong:
   enabled: true
+  ingressController:
+    enabled: true
+  proxy:
+    tls:
+      enabled: true
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
   replicaCount: 3
-  
   image:
     repository: kong
     tag: "3.4"
     pullPolicy: IfNotPresent
-  
   resources:
     limits:
       cpu: "2"
@@ -108,30 +135,24 @@ kong:
     requests:
       cpu: "500m"
       memory: "1Gi"
-  
   service:
     type: LoadBalancer
-  
   env:
     - name: KONG_PLUGINS
       value: bundled,jwt,oauth2,cors,prometheus,zipkin,rate-limiting,request-transformer,response-transformer,circuit-breaker
-  
   podAnnotations:
     prometheus.io/scrape: "true"
     prometheus.io/port: "8100"
-  
   config:
     redis:
       host: redis
       port: 6379
       database: 0
-    
     jwt:
       key_claim_name: kid
       claims_to_verify:
         - exp
       maximum_expiration: 3600
-    
     oauth2:
       scopes:
         - tools:read
@@ -139,13 +160,11 @@ kong:
       token_expiration: 7200
       enable_authorization_code: true
       enable_client_credentials: true
-    
     rateLimit:
       agent_api:
         minute: 60
       tools_api:
         minute: 30
-    
     cors:
       origins:
         - "*"
@@ -161,13 +180,61 @@ kong:
         - X-Auth-Token
       credentials: true
       max_age: 3600
-    
     tracing:
       enabled: true
       endpoint: http://jaeger-collector:9411/api/v2/spans
       sample_ratio: 1.0
-    
     circuitBreaker:
       timeout: 10000
       failures: 5
       reset_timeout: 60000
+
+prometheus:
+  alertmanager:
+    enabled: true
+  pushgateway:
+    enabled: true
+  server:
+    retention: 15d
+    persistentVolume:
+      size: 50Gi
+
+grafana:
+  persistence:
+    enabled: true
+    size: 10Gi
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards
+  dashboardsConfigMaps:
+    - configMapName: agent360-grafana-dashboards
+      fileName: agent-dashboard.json
+
+networkPolicies:
+  enabled: true
+
+monitoring:
+  enabled: true
+  scrapeInterval: 15s
+
+config:
+  environment: production
+  logging:
+    level: INFO
+    format: json
+  monitoring:
+    prometheus:
+      enabled: true
+      port: 8000
+  agent:
+    maxConcurrentTasks: 100
+    defaultTimeoutSeconds: 300
