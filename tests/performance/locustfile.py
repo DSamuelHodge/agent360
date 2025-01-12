@@ -1,87 +1,88 @@
 """
 Performance tests for Agent360 using Locust.
 """
-from locust import HttpUser, task, between
+from locust import HttpUser, task, between, events
 from typing import Dict, Any
 import json
 import random
+import time
 
-class Agent360User(HttpUser):
-    """Simulated user for load testing."""
+class AuthenticationUser(HttpUser):
+    """Simulated user for authentication load testing."""
     
-    wait_time = between(1, 3)
+    wait_time = between(0.1, 0.5)  # Reduced wait time for auth testing
+    host = "http://localhost:8000"
     
-    def on_start(self):
-        """Setup before tests."""
-        # Login and get token
-        response = self.client.post("/api/v1/auth/token", json={
-            "username": "test_user",
-            "password": "test_password"
-        })
-        self.token = response.json()["access_token"]
-        self.headers = {"Authorization": f"Bearer {self.token}"}
-        
-    @task(3)
-    def execute_simple_query(self):
-        """Test simple query execution."""
-        payload = {
-            "input": {
-                "query": "What is the weather?",
-                "tools": ["rest_tool"]
-            },
-            "timeout": 30
-        }
-        self.client.post(
-            "/api/v1/agent/execute",
-            json=payload,
-            headers=self.headers
-        )
-        
-    @task(2)
-    def execute_complex_query(self):
-        """Test complex query with multiple tools."""
-        payload = {
-            "input": {
-                "query": "Get user data and analyze trends",
-                "tools": ["database_tool", "rest_tool"]
-            },
-            "timeout": 60
-        }
-        self.client.post(
-            "/api/v1/agent/execute",
-            json=payload,
-            headers=self.headers
-        )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.auth_success = 0
+        self.auth_failure = 0
+        self.total_latency = 0
         
     @task(1)
-    def execute_rag_query(self):
-        """Test RAG functionality."""
-        payload = {
-            "input": {
-                "query": "Find similar documents",
-                "tools": ["rag_tool"],
-                "parameters": {
-                    "k": 5,
-                    "threshold": 0.7
+    def authenticate(self):
+        """Test authentication performance."""
+        start_time = time.time()
+        try:
+            response = self.client.post(
+                "/api/v1/auth/token",
+                data={
+                    "username": "test_user",
+                    "password": "test_password",
+                    "scope": "default"
                 }
-            },
-            "timeout": 45
-        }
-        self.client.post(
-            "/api/v1/agent/execute",
-            json=payload,
-            headers=self.headers
-        )
-        
-    @task
-    def list_tools(self):
-        """Test tool listing endpoint."""
-        self.client.get(
-            "/api/v1/agent/tools",
-            headers=self.headers
-        )
-        
-    @task
-    def health_check(self):
-        """Test health check endpoint."""
-        self.client.get("/health")
+            )
+            
+            if response.status_code == 200:
+                self.auth_success += 1
+            else:
+                self.auth_failure += 1
+                
+            latency = (time.time() - start_time) * 1000  # Convert to ms
+            self.total_latency += latency
+            
+            # Log detailed metrics
+            self.environment.events.request.fire(
+                request_type="POST",
+                name="/api/v1/auth/token",
+                response_time=latency,
+                response_length=len(response.content),
+                response=response,
+                context={
+                    "success": response.status_code == 200,
+                    "latency_ms": latency
+                }
+            )
+            
+        except Exception as e:
+            self.auth_failure += 1
+            self.environment.events.request_failure.fire(
+                request_type="POST",
+                name="/api/v1/auth/token",
+                response_time=0,
+                exception=e
+            )
+            
+    def on_stop(self):
+        """Report metrics when test stops."""
+        total_requests = self.auth_success + self.auth_failure
+        if total_requests > 0:
+            avg_latency = self.total_latency / total_requests
+            success_rate = (self.auth_success / total_requests) * 100
+            
+            print("\nAuthentication Performance Metrics:")
+            print(f"Total Requests: {total_requests}")
+            print(f"Successful Authentications: {self.auth_success}")
+            print(f"Failed Authentications: {self.auth_failure}")
+            print(f"Average Latency: {avg_latency:.2f}ms")
+            print(f"Success Rate: {success_rate:.2f}%")
+
+@events.test_start.add_listener
+def on_test_start(environment, **kwargs):
+    """Setup before test starts."""
+    print("Starting Authentication Performance Test")
+
+@events.test_stop.add_listener
+def on_test_stop(environment, **kwargs):
+    """Cleanup after test ends."""
+    print("\nAuthentication Performance Test Complete")

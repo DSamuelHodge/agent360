@@ -9,6 +9,7 @@ from confluent_kafka import Producer, Consumer, KafkaError, KafkaException
 from prometheus_client import Counter, Histogram
 from opentelemetry import trace
 from opentelemetry.trace import Span
+from opentelemetry.trace.status import Status, StatusCode
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -221,3 +222,97 @@ class RedpandaClient:
             self.producer.close()
         if self.consumer:
             self.consumer.close()
+
+
+class RedpandaProducer:
+    """Producer for sending events to Redpanda."""
+    
+    _instance = None
+    
+    def __init__(self, client: RedpandaClient):
+        """Initialize producer.
+        
+        Args:
+            client: Redpanda client
+        """
+        self.client = client
+        self.producer = client.producer
+    
+    @classmethod
+    async def get_instance(cls) -> 'RedpandaProducer':
+        """Get singleton instance.
+        
+        Returns:
+            RedpandaProducer instance
+        """
+        if not cls._instance:
+            client = RedpandaClient(
+                bootstrap_servers="localhost:9092",
+                client_id="agent360-producer"
+            )
+            cls._instance = cls(client)
+        return cls._instance
+    
+    async def send_event(
+        self,
+        topic: str,
+        key: str,
+        value: Dict[str, Any],
+        headers: Optional[List[tuple]] = None
+    ) -> None:
+        """Send event to topic.
+        
+        Args:
+            topic: Topic name
+            key: Message key
+            value: Message value
+            headers: Optional message headers
+        """
+        with tracer.start_as_current_span("redpanda.send_event") as span:
+            span.set_attribute("messaging.system", "redpanda")
+            span.set_attribute("messaging.destination", topic)
+            span.set_attribute("messaging.destination_kind", "topic")
+            
+            try:
+                # Serialize value to JSON
+                value_bytes = json.dumps(value).encode('utf-8')
+                key_bytes = key.encode('utf-8')
+                
+                # Send message
+                self.producer.produce(
+                    topic=topic,
+                    key=key_bytes,
+                    value=value_bytes,
+                    headers=headers,
+                    callback=self._delivery_callback
+                )
+                
+                # Wait for message delivery
+                self.producer.poll(0)
+                
+                MESSAGES_PRODUCED.labels(topic=topic).inc()
+                
+            except Exception as e:
+                logger.error(f"Failed to send event to {topic}: {e}")
+                span.set_status(Status(StatusCode.ERROR))
+                span.record_exception(e)
+                raise
+    
+    def _delivery_callback(
+        self,
+        err: Optional[KafkaError],
+        msg: Any
+    ) -> None:
+        """Handle message delivery callback.
+        
+        Args:
+            err: Error if delivery failed
+            msg: Delivered message
+        """
+        if err:
+            logger.error(f"Message delivery failed: {err}")
+        else:
+            logger.debug(
+                f"Message delivered to {msg.topic()} [{msg.partition()}] "
+                f"at offset {msg.offset()}"
+            )

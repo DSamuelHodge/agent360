@@ -43,6 +43,19 @@ coverage.xml
 *.py,cover
 .hypothesis/
 
+# Testing
+test-results/
+test-reports/
+junit.xml
+pytest-report.html
+coverage/
+.coverage.*
+cov.xml
+.benchmarks/
+prof/
+*.prof
+.pytest.restart
+
 # Virtual Environment
 venv/
 ENV/
@@ -125,19 +138,6 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
-# Testing
-.coverage
-.tox/
-.nox/
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
-cover/
 
 # Documentation
 docs/_build/

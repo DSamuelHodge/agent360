@@ -14,7 +14,7 @@ from temporalio.common import RetryPolicy
 from ..agent_runtime.context import AgentContext, AgentState, StateManager
 from ..infrastructure.redis_client import RedisClient
 from ..infrastructure.redpanda_client import RedpandaProducer
-from ..database.connection import CassandraConnection
+from ..database.connection import DatabaseConnection
 from ..integrations.integration_manager import IntegrationManager
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,12 @@ class AgentWorkflow:
     def __init__(self):
         self._state = None
         self._context = None
+        self._retry_policy = RetryPolicy(
+            initial_interval=1,
+            backoff_coefficient=2.0,
+            maximum_interval=5,
+            maximum_attempts=5
+        )
     
     @workflow.run
     async def run(self, context: AgentContext) -> Dict[str, Any]:
@@ -98,13 +104,8 @@ class AgentWorkflow:
                 result = await workflow.execute_activity(
                     execute_reasoning,
                     self._context,
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=1),
-                        maximum_interval=timedelta(seconds=10),
-                        maximum_attempts=3,
-                        non_retryable_error_types=['ValueError']
-                    )
+                    retry_policy=self._retry_policy,
+                    start_to_close_timeout=300
                 )
                 
                 WORKFLOW_STEPS.labels(
@@ -139,12 +140,8 @@ class AgentWorkflow:
                         'context': self._context,
                         'tool_selection': tool_selection
                     },
-                    start_to_close_timeout=timedelta(minutes=10),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=1),
-                        maximum_interval=timedelta(seconds=30),
-                        maximum_attempts=3
-                    )
+                    retry_policy=self._retry_policy,
+                    start_to_close_timeout=600
                 )
                 
                 WORKFLOW_STEPS.labels(
@@ -179,12 +176,8 @@ class AgentWorkflow:
                         'context': self._context,
                         'tool_result': tool_result
                     },
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=1),
-                        maximum_interval=timedelta(seconds=10),
-                        maximum_attempts=3
-                    )
+                    retry_policy=self._retry_policy,
+                    start_to_close_timeout=300
                 )
                 
                 WORKFLOW_STEPS.labels(
@@ -203,16 +196,17 @@ class AgentWorkflow:
     
     async def _update_state(self):
         """Update workflow state."""
-        await workflow.execute_activity(
-            update_state,
-            self._state,
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=1),
-                maximum_interval=timedelta(seconds=5),
-                maximum_attempts=5
+        try:
+            result = await workflow.execute_activity(
+                update_state,
+                self._state,
+                retry_policy=self._retry_policy,
+                start_to_close_timeout=30
             )
-        )
+            self._state = result
+        except Exception as e:
+            logger.error(f"State update failed: {str(e)}")
+            raise
 
 @activity.defn
 async def execute_reasoning(context: AgentContext) -> Dict[str, Any]:
@@ -279,17 +273,18 @@ async def process_result(
     }
 
 @activity.defn
-async def update_state(state: AgentState):
+async def update_state(state: AgentState) -> AgentState:
     """Update agent state activity.
     
     Args:
         state: Agent state to update
     """
     # Get infrastructure clients
-    cassandra = await CassandraConnection.get_instance()
+    cassandra = await DatabaseConnection.get_instance()
     redis = await RedisClient.get_instance()
     events = await RedpandaProducer.get_instance()
     
     # Update state
     state_manager = StateManager(cassandra, redis, events)
     await state_manager.update_state(state)
+    return state

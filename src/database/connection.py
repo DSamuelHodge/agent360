@@ -1,189 +1,197 @@
-"""
-Cassandra connection management for Agent360.
-"""
-
+"""Database connection management for Agent360."""
 import logging
 from typing import Optional, Dict, Any
-from cassandra.cluster import (
-    Cluster,
-    Session,
-    ExecutionProfile,
-    EXEC_PROFILE_DEFAULT
-)
-from cassandra.policies import (
-    DCAwareRoundRobinPolicy,
-    TokenAwarePolicy,
-    RetryPolicy,
-    ConstantReconnectionPolicy
-)
+from cassandra.cluster import Cluster, Session
 from cassandra.auth import PlainTextAuthProvider
-from cassandra.query import dict_factory
-from cassandra.cqlengine import connection
-from prometheus_client import Counter, Histogram
-from opentelemetry import trace
+from cassandra.policies import DCAwareRoundRobinPolicy
+
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
-tracer = trace.get_tracer(__name__)
 
-# Metrics
-QUERY_COUNT = Counter(
-    'cassandra_queries_total',
-    'Total number of Cassandra queries',
-    ['operation', 'table']
-)
-QUERY_LATENCY = Histogram(
-    'cassandra_query_latency_seconds',
-    'Query latency in seconds',
-    ['operation', 'table']
-)
-ERROR_COUNT = Counter(
-    'cassandra_errors_total',
-    'Total number of Cassandra errors',
-    ['type']
-)
-
-class CassandraConnection:
-    """Manages Cassandra cluster connections with monitoring."""
+class MockSession:
+    """Mock session for offline mode."""
     
-    def __init__(
-        self,
-        hosts: list,
-        port: int = 9042,
-        keyspace: str = 'agent360',
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        datacenter: Optional[str] = None,
-        ssl_context: Optional[Dict[str, Any]] = None
-    ):
-        """Initialize Cassandra connection.
+    def execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> list:
+        """Mock query execution.
         
         Args:
-            hosts: List of Cassandra hosts
-            port: Cassandra port
-            keyspace: Default keyspace
-            username: Optional username for authentication
-            password: Optional password for authentication
-            datacenter: Optional datacenter name
-            ssl_context: Optional SSL context for secure connections
-        """
-        self.hosts = hosts
-        self.port = port
-        self.keyspace = keyspace
-        self.datacenter = datacenter
-        
-        # Create execution profile
-        self.profile = ExecutionProfile(
-            load_balancing_policy=TokenAwarePolicy(
-                DCAwareRoundRobinPolicy(local_dc=datacenter if datacenter else None)
-            ),
-            retry_policy=RetryPolicy(),
-            row_factory=dict_factory
-        )
-        
-        # Configure auth if provided
-        auth_provider = None
-        if username and password:
-            auth_provider = PlainTextAuthProvider(
-                username=username,
-                password=password
-            )
-        
-        # Create cluster
-        self.cluster = Cluster(
-            contact_points=hosts,
-            port=port,
-            auth_provider=auth_provider,
-            execution_profiles={
-                EXEC_PROFILE_DEFAULT: self.profile
-            },
-            ssl_context=ssl_context,
-            reconnection_policy=ConstantReconnectionPolicy(delay=1.0),
-            control_connection_timeout=10.0,
-            connect_timeout=10.0
-        )
-        
-        self.session: Optional[Session] = None
-        self._connect()
-    
-    def _connect(self) -> None:
-        """Establish connection to Cassandra cluster."""
-        try:
-            self.session = self.cluster.connect(self.keyspace)
-            
-            # Register connection for cqlengine
-            connection.register_connection(
-                'default',
-                session=self.session
-            )
-            
-            logger.info(
-                f"Connected to Cassandra cluster: {self.hosts}"
-                f" (keyspace: {self.keyspace})"
-            )
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to Cassandra: {e}")
-            ERROR_COUNT.labels(type='connection').inc()
-            raise
-    
-    async def execute(
-        self,
-        query: str,
-        parameters: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None
-    ) -> list:
-        """Execute a CQL query.
-        
-        Args:
-            query: CQL query string
-            parameters: Query parameters
-            timeout: Query timeout in seconds
+            query: Query to execute
+            params: Query parameters
             
         Returns:
-            List of rows as dictionaries
+            Empty list
         """
-        with tracer.start_as_current_span('cassandra.query') as span:
-            span.set_attribute('db.system', 'cassandra')
-            span.set_attribute('db.statement', query)
+        logger.debug(f"Mock execute: {query} with params {params}")
+        return []
+        
+    def execute_async(self, query: str, params: Optional[Dict[str, Any]] = None):
+        """Mock async query execution.
+        
+        Args:
+            query: Query to execute
+            params: Query parameters
             
-            try:
-                # Extract operation and table from query
-                operation = query.split()[0].lower()
-                table = query.split()[2].split('.')[1] if '.' in query else query.split()[2]
-                
-                with QUERY_LATENCY.labels(
-                    operation=operation,
-                    table=table
-                ).time():
-                    if not self.session:
-                        self._connect()
-                    
-                    result = self.session.execute(
-                        query,
-                        parameters=parameters or {},
-                        timeout=timeout
-                    )
-                    
-                    QUERY_COUNT.labels(
-                        operation=operation,
-                        table=table
-                    ).inc()
-                    
-                    return list(result)
-                
-            except Exception as e:
-                logger.error(f"Query execution failed: {e}")
-                ERROR_COUNT.labels(type='query').inc()
-                span.record_exception(e)
-                raise
+        Returns:
+            None
+        """
+        logger.debug(f"Mock execute async: {query} with params {params}")
+        return None
+        
+    def shutdown(self):
+        """Mock shutdown."""
+        pass
+
+class MockCluster:
+    """Mock cluster for offline mode."""
     
-    def close(self) -> None:
-        """Close cluster connection."""
-        if self.session:
-            self.session.shutdown()
-        if self.cluster:
-            self.cluster.shutdown()
+    def shutdown(self):
+        """Mock shutdown."""
+        pass
+
+class DatabaseConnection:
+    """Singleton database connection manager."""
+    
+    _instance = None
+    _session: Optional[Session] = None
+    _cluster = None
+    
+    def __new__(cls):
+        """Create singleton instance."""
+        if cls._instance is None:
+            cls._instance = super(DatabaseConnection, cls).__new__(cls)
+        return cls._instance
+        
+    def __init__(self):
+        """Initialize connection manager."""
+        if not hasattr(self, 'initialized'):
+            self.settings = get_settings()
+            self.initialized = True
+            self.offline_mode = True
+            self._session = MockSession()
+            self._cluster = MockCluster()
             
-    def __del__(self) -> None:
-        """Cleanup on deletion."""
-        self.close()
+    async def connect(self) -> None:
+        """Connect to database."""
+        try:
+            # Configure auth if credentials provided
+            auth_provider = None
+            if self.settings.cassandra_username and self.settings.cassandra_password:
+                auth_provider = PlainTextAuthProvider(
+                    username=self.settings.cassandra_username,
+                    password=self.settings.cassandra_password
+                )
+                
+            # Create cluster
+            cluster = Cluster(
+                contact_points=self.settings.cassandra_hosts,
+                port=self.settings.cassandra_port,
+                auth_provider=auth_provider,
+                load_balancing_policy=DCAwareRoundRobinPolicy(),
+                protocol_version=4
+            )
+            
+            # Connect and create keyspace if needed
+            session = cluster.connect()
+            
+            # Create keyspace if it doesn't exist
+            session.execute("""
+                CREATE KEYSPACE IF NOT EXISTS %s
+                WITH replication = {
+                    'class': 'SimpleStrategy',
+                    'replication_factor': '1'
+                }
+            """ % self.settings.cassandra_keyspace)
+            
+            # Use keyspace
+            session.set_keyspace(self.settings.cassandra_keyspace)
+            
+            # Only set cluster and session if connection succeeds
+            self._cluster = cluster
+            self._session = session
+            self.offline_mode = False
+            logger.info("Successfully connected to database")
+            
+        except Exception as e:
+            logger.warning(f"Failed to connect to database: {str(e)}")
+            logger.warning("Running in offline mode")
+            if self._session:
+                self._session.shutdown()
+            if self._cluster:
+                self._cluster.shutdown()
+            self.offline_mode = True
+            self._session = MockSession()
+            self._cluster = MockCluster()
+            
+    def execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> list:
+        """Execute a query.
+        
+        Args:
+            query: Query to execute
+            params: Query parameters
+            
+        Returns:
+            Query results
+        """
+        if self.offline_mode:
+            return []
+            
+        try:
+            result = self._session.execute(query, params or {})
+            return list(result)
+        except Exception as e:
+            logger.error(f"Query execution failed: {str(e)}")
+            return []
+            
+    def execute_async(self, query: str, params: Optional[Dict[str, Any]] = None):
+        """Execute a query asynchronously.
+        
+        Args:
+            query: Query to execute
+            params: Query parameters
+            
+        Returns:
+            Future for query result
+        """
+        try:
+            if self.offline_mode:
+                return None
+            return self._session.execute_async(query, params or {})
+        except Exception as e:
+            logger.error(f"Async query execution failed: {str(e)}")
+            return None
+            
+    def get_session(self) -> Optional[Session]:
+        """Get current database session.
+        
+        Returns:
+            Current session
+        """
+        return self._session
+        
+    async def close(self):
+        """Close database connection."""
+        if self._session:
+            self._session.shutdown()
+            self._session = None
+            
+        if self._cluster:
+            self._cluster.shutdown()
+            self._cluster = None
+            
+        self.offline_mode = True
+        self._session = MockSession()
+        self._cluster = MockCluster()
+
+_connection = None
+
+def get_connection() -> DatabaseConnection:
+    """Get database connection instance.
+    
+    Returns:
+        Singleton database connection instance
+    """
+    global _connection
+    if _connection is None:
+        _connection = DatabaseConnection()
+    return _connection

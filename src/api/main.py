@@ -1,24 +1,29 @@
-"""
-Main API implementation for Agent360.
-Provides RESTful endpoints for agent interaction and management.
-"""
-from typing import Dict, Any, List
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel
+"""Main API entry point for Agent360."""
 import logging
-import json
-from datetime import datetime
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Dict, Any
+
+from ..auth.authentication_service import AuthenticationService
+from ..workflows.workflow_service import WorkflowService
+from ..database.connection import get_connection
+from ..config import get_settings
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class Token(BaseModel):
+    """Token response model."""
+    access_token: str
+    token_type: str
 
 # Initialize FastAPI app
-app = FastAPI(
-    title="Agent360 API",
-    description="Enterprise-grade agent infrastructure API",
-    version="1.0.0"
-)
+app = FastAPI(title="Agent360 API")
 
-# Configure CORS
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,83 +32,110 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure authentication
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# Initialize services
+settings = get_settings()
+auth_service = AuthenticationService()
+workflow_service = WorkflowService()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# OAuth2 scheme for token authentication
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
 
-class AgentRequest(BaseModel):
-    """Model for agent execution requests."""
-    input: Dict[str, Any]
-    tools: List[str] = []
-    timeout: int = 300
-
-class AgentResponse(BaseModel):
-    """Model for agent execution responses."""
-    output: Dict[str, Any]
-    execution_time: float
-    tool_usage: Dict[str, int]
-
-@app.post("/api/v1/agent/execute", response_model=AgentResponse)
-async def execute_agent(
-    request: AgentRequest,
-    token: str = Depends(oauth2_scheme)
-):
-    """
-    Execute an agent task.
-    
-    Args:
-        request: Agent execution request
-        token: Authentication token
-        
-    Returns:
-        Agent execution response
-    """
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup."""
     try:
-        start_time = datetime.now()
+        # Initialize database connection
+        db = get_connection()
+        await db.connect()
         
-        # TODO: Implement agent execution logic
-        # This should:
-        # 1. Validate the request
-        # 2. Initialize required tools
-        # 3. Execute the agent workflow
-        # 4. Monitor and collect metrics
-        # 5. Return results
+        # Initialize auth service
+        await auth_service.initialize()
         
-        raise NotImplementedError("Agent execution not implemented")
+        logger.info("Successfully initialized all services")
+    except Exception as e:
+        logger.error(f"Failed to initialize services: {str(e)}")
+        raise
+
+@app.post("/api/v1/auth/token", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Login endpoint to get access token."""
+    try:
+        result = await auth_service.authenticate(
+            form_data.username,
+            form_data.password
+        )
+        
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
+        return result
         
     except Exception as e:
-        logger.error(f"Agent execution failed: {str(e)}")
+        logger.error(f"Login error: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
         )
 
-@app.get("/api/v1/agent/tools")
-async def list_tools(token: str = Depends(oauth2_scheme)):
-    """
-    List available tools.
-    
-    Args:
-        token: Authentication token
-        
-    Returns:
-        List of available tools and their metadata
-    """
+@app.post("/api/v1/workflows/execute")
+async def execute_workflow(workflow_id: str, token: str = Depends(oauth2_scheme)):
+    """Execute a workflow by ID."""
     try:
-        # TODO: Implement tool listing logic
-        raise NotImplementedError("Tool listing not implemented")
+        # Verify token
+        user = await auth_service.verify_token(token)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+            
+        # Execute workflow
+        result = await workflow_service.execute_workflow(
+            workflow_id,
+            user_id=user['sub']
+        )
+        
+        return result
         
     except Exception as e:
-        logger.error(f"Failed to list tools: {str(e)}")
+        logger.error(f"Workflow execution error: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
+
+@app.get("/api/v1/workflows/{workflow_id}/status")
+async def get_workflow_status(workflow_id: str, token: str = Depends(oauth2_scheme)):
+    """Get workflow execution status."""
+    try:
+        # Verify token
+        user = await auth_service.verify_token(token)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+            
+        # Get status
+        status = await workflow_service.get_workflow_status(
+            workflow_id,
+            user_id=user['sub']
+        )
+        
+        return status
+        
+    except Exception as e:
+        logger.error(f"Workflow status error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
         )
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    return {"status": "healthy"}

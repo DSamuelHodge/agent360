@@ -1,228 +1,196 @@
 """
-Cassandra schema definitions for Agent360.
+Database schema definitions for Agent360.
 """
-
 from cassandra.cqlengine import columns
 from cassandra.cqlengine.models import Model
-from cassandra.cqlengine.management import sync_table, create_keyspace_simple
 from datetime import datetime
-from typing import Dict, Any, Optional
-from uuid import UUID
+from typing import Optional, List, Dict, Any
+from uuid import UUID, uuid4
+import logging
 
-class BaseModel(Model):
-    """Base model with common fields."""
-    __abstract__ = True
-    __keyspace__ = 'agent360'
+logger = logging.getLogger(__name__)
 
-class Agent(BaseModel):
-    """Agent model for storing agent configurations and state."""
-    __table_name__ = 'agents'
+class User(Model):
+    """User model for authentication and authorization."""
+    __table_name__ = 'users'
     
-    id = columns.UUID(primary_key=True)
-    tenant_id = columns.Text(primary_key=True)
-    name = columns.Text(required=True)
-    description = columns.Text()
-    status = columns.Text(default='active')
-    capabilities = columns.List(value_type=columns.Text)
-    config = columns.Map(key_type=columns.Text, value_type=columns.Text)
+    id = columns.UUID(primary_key=True, default=uuid4)
+    username = columns.Text(required=True, index=True)
+    hashed_password = columns.Text(required=True)
+    email = columns.Text(required=True, index=True)
+    tenant_id = columns.Text(required=True, index=True)
+    roles = columns.List(value_type=columns.Text)
     created_at = columns.DateTime(default=datetime.utcnow)
-    updated_at = columns.DateTime()
-    last_active = columns.DateTime()
-    version = columns.Text()
-
-class Task(BaseModel):
-    """Task model for storing agent tasks and their results."""
-    __table_name__ = 'tasks'
+    updated_at = columns.DateTime(default=datetime.utcnow)
+    last_login = columns.DateTime()
+    failed_attempts = columns.Integer(default=0)
+    locked_until = columns.DateTime()
     
-    id = columns.UUID(primary_key=True)
-    agent_id = columns.UUID(index=True)
-    tenant_id = columns.Text(primary_key=True)
-    type = columns.Text(index=True)
-    status = columns.Text(index=True)
-    priority = columns.Integer(default=0)
-    parameters = columns.Map(key_type=columns.Text, value_type=columns.Text)
-    result = columns.Text()
-    error = columns.Text()
-    created_at = columns.DateTime(default=datetime.utcnow)
-    started_at = columns.DateTime()
-    completed_at = columns.DateTime()
-    timeout_at = columns.DateTime()
+    def __str__(self) -> str:
+        return f"User(username={self.username}, tenant={self.tenant_id})"
 
-class Conversation(BaseModel):
-    """Model for storing conversation history."""
-    __table_name__ = 'conversations'
-    
-    id = columns.UUID(primary_key=True)
-    tenant_id = columns.Text(primary_key=True)
-    agent_id = columns.UUID(index=True)
-    user_id = columns.Text(index=True)
-    messages = columns.List(value_type=columns.Map(key_type=columns.Text, value_type=columns.Text))
-    metadata = columns.Map(key_type=columns.Text, value_type=columns.Text)
-    created_at = columns.DateTime(default=datetime.utcnow)
-    updated_at = columns.DateTime()
-    status = columns.Text(default='active')
-
-class VectorEmbedding(BaseModel):
-    """Model for storing vector embeddings for RAG."""
-    __table_name__ = 'vector_embeddings'
-    
-    id = columns.UUID(primary_key=True)
-    tenant_id = columns.Text(primary_key=True)
-    content_type = columns.Text(index=True)
-    content_id = columns.Text(index=True)
-    embedding = columns.List(value_type=columns.Float)
-    metadata = columns.Map(key_type=columns.Text, value_type=columns.Text)
-    created_at = columns.DateTime(default=datetime.utcnow)
-
-class AuditLog(BaseModel):
-    """Model for storing audit logs."""
+class AuditLog(Model):
+    """Audit log for tracking system events."""
     __table_name__ = 'audit_logs'
     
-    id = columns.UUID(primary_key=True)
-    tenant_id = columns.Text(primary_key=True)
-    timestamp = columns.DateTime(primary_key=True, clustering_order='DESC')
-    event_type = columns.Text(index=True)
-    user_id = columns.Text(index=True)
+    id = columns.UUID(primary_key=True, default=uuid4)
+    event_time = columns.DateTime(primary_key=True, default=datetime.utcnow, clustering_order="DESC")
+    event_type = columns.Text(required=True, index=True)
+    user_id = columns.UUID(index=True)
+    tenant_id = columns.Text(required=True, index=True)
     resource_type = columns.Text()
     resource_id = columns.Text()
     action = columns.Text()
     status = columns.Text()
     details = columns.Text()
-    ip_address = columns.Text()
-    user_agent = columns.Text()
-    correlation_id = columns.Text(index=True)
-
-class Tenant(BaseModel):
-    """Model for storing tenant information."""
-    __table_name__ = 'tenants'
     
-    id = columns.UUID(primary_key=True)
-    name = columns.Text(required=True)
-    status = columns.Text(default='active')
-    created_at = columns.DateTime(default=datetime.utcnow)
-    updated_at = columns.DateTime()
-    config = columns.Text()
-    quota = columns.Map(key_type=columns.Text, value_type=columns.Integer)
+    def __str__(self) -> str:
+        return f"AuditLog(type={self.event_type}, user={self.user_id}, tenant={self.tenant_id})"
 
-class ModelMetrics(BaseModel):
-    """Model for storing LLM performance metrics."""
-    __table_name__ = 'model_metrics'
+class WorkflowExecution(Model):
+    """Workflow execution tracking."""
+    __table_name__ = 'workflow_executions'
     
-    id = columns.UUID(primary_key=True)
-    tenant_id = columns.Text(primary_key=True)
-    timestamp = columns.DateTime(primary_key=True, clustering_order='DESC')
-    model_name = columns.Text(index=True)
-    request_id = columns.Text(index=True)
-    prompt_tokens = columns.Integer()
-    completion_tokens = columns.Integer()
-    total_tokens = columns.Integer()
-    latency_ms = columns.Float()
-    error_type = columns.Text()
+    id = columns.UUID(primary_key=True, default=uuid4)
+    start_time = columns.DateTime(primary_key=True, default=datetime.utcnow, clustering_order="DESC")
+    workflow_type = columns.Text(required=True, index=True)
+    user_id = columns.UUID(index=True)
+    tenant_id = columns.Text(required=True, index=True)
+    status = columns.Text(default="pending")
+    input_data = columns.Text()
+    output_data = columns.Text()
     error_message = columns.Text()
-    metadata = columns.Map(key_type=columns.Text, value_type=columns.Text)
-
-class AgentSkill(BaseModel):
-    """Model for storing agent skills and capabilities."""
-    __table_name__ = 'agent_skills'
+    completion_time = columns.DateTime()
+    execution_time_ms = columns.Integer()
     
-    id = columns.UUID(primary_key=True)
-    tenant_id = columns.Text(primary_key=True)
-    name = columns.Text(required=True)
-    description = columns.Text()
-    version = columns.Text()
-    parameters = columns.Map(key_type=columns.Text, value_type=columns.Text)
-    requirements = columns.List(value_type=columns.Text)
-    created_at = columns.DateTime(default=datetime.utcnow)
-    updated_at = columns.DateTime()
-    status = columns.Text(default='active')
-    category = columns.Text(index=True)
-    tags = columns.List(value_type=columns.Text)
+    def __str__(self) -> str:
+        return f"WorkflowExecution(id={self.id}, type={self.workflow_type}, status={self.status})"
 
-class DataCache(BaseModel):
-    """Model for caching frequently accessed data."""
+class MetricsLog(Model):
+    """Performance and operational metrics."""
+    __table_name__ = 'metrics_logs'
+    
+    id = columns.UUID(primary_key=True, default=uuid4)
+    metric_time = columns.DateTime(primary_key=True, default=datetime.utcnow, clustering_order="DESC")
+    metric_type = columns.Text(required=True, index=True)
+    tenant_id = columns.Text(required=True, index=True)
+    value = columns.Double()
+    unit = columns.Text()
+    tags = columns.Map(key_type=columns.Text, value_type=columns.Text)
+    
+    def __str__(self) -> str:
+        return f"MetricsLog(type={self.metric_type}, value={self.value} {self.unit})"
+
+class RateLimitCounter(Model):
+    """Rate limiting counters."""
+    __table_name__ = 'rate_limit_counters'
+    
+    key = columns.Text(primary_key=True)
+    window = columns.DateTime(primary_key=True)
+    count = columns.Counter()
+    
+    class Meta:
+        counter_updates_enabled = True
+
+class CacheStats(Model):
+    """Cache statistics tracking."""
+    __table_name__ = 'cache_stats'
+    
+    cache_key = columns.Text(primary_key=True)
+    hits = columns.Counter()
+    misses = columns.Counter()
+    
+    class Meta:
+        counter_updates_enabled = True
+
+class DataCache(Model):
+    """Data cache tracking."""
     __table_name__ = 'data_cache'
     
     key = columns.Text(primary_key=True)
-    tenant_id = columns.Text(primary_key=True)
-    value = columns.Text()
-    content_type = columns.Text()
-    expires_at = columns.DateTime()
-    last_accessed = columns.DateTime()
-    access_count = columns.Counter()
-    size_bytes = columns.Integer()
+    hits = columns.Counter()
+    misses = columns.Counter()
+    
+    class Meta:
+        counter_updates_enabled = True
 
-class ResourceUsage(BaseModel):
-    """Model for tracking resource usage and quotas."""
+class ResourceUsage(Model):
+    """Resource usage tracking."""
     __table_name__ = 'resource_usage'
     
     tenant_id = columns.Text(primary_key=True)
     resource_type = columns.Text(primary_key=True)
-    timestamp = columns.DateTime(primary_key=True, clustering_order='DESC')
-    usage_amount = columns.Float()
-    quota_limit = columns.Float()
-    quota_used = columns.Float()
-    cost = columns.Decimal()
-    metadata = columns.Map(key_type=columns.Text, value_type=columns.Text)
+    used = columns.Counter()
+    
+    class Meta:
+        counter_updates_enabled = True
 
-class Integration(BaseModel):
-    """Model for storing external service integrations."""
+class ServiceHealth(Model):
+    """Service health tracking."""
+    __table_name__ = 'service_health'
+    
+    service_id = columns.Text(primary_key=True)
+    error_count = columns.Counter()
+    request_count = columns.Counter()
+    
+    class Meta:
+        counter_updates_enabled = True
+
+class IntegrationStats(Model):
+    """Integration statistics."""
+    __table_name__ = 'integration_stats'
+    
+    integration_id = columns.Text(primary_key=True)
+    success_count = columns.Counter()
+    error_count = columns.Counter()
+    
+    class Meta:
+        counter_updates_enabled = True
+
+class Integration(Model):
+    """Integration configuration model."""
     __table_name__ = 'integrations'
     
-    id = columns.UUID(primary_key=True)
-    tenant_id = columns.Text(primary_key=True)
-    service_type = columns.Text(index=True)  # github, jira, slack, etc.
+    integration_type = columns.Text(primary_key=True)
     config = columns.Map(key_type=columns.Text, value_type=columns.Text)
-    credentials = columns.Text()  # encrypted
-    status = columns.Text(default='active')
-    health_status = columns.Text()
-    last_health_check = columns.DateTime()
-    error_count = columns.Counter()
+    enabled = columns.Boolean(default=True)
+    retry_policy = columns.Map(key_type=columns.Text, value_type=columns.Text, default=None)
+    timeout_seconds = columns.Integer(default=30)
+    cache_ttl_seconds = columns.Integer(default=3600)
     created_at = columns.DateTime(default=datetime.utcnow)
     updated_at = columns.DateTime()
-
-class IntegrationLog(BaseModel):
-    """Model for storing integration logs."""
-    __table_name__ = 'integration_logs'
     
-    integration_type = columns.Text(primary_key=True)
-    operation = columns.Text(primary_key=True)
-    params = columns.Map(key_type=columns.Text, value_type=columns.Text)
-    result = columns.Map(key_type=columns.Text, value_type=columns.Text)
-    status = columns.Text()
-    error = columns.Text()
-    duration_ms = columns.Integer()
-    created_at = columns.DateTime(primary_key=True, clustering_order='DESC')
+    def __str__(self) -> str:
+        return f"Integration(type={self.integration_type}, enabled={self.enabled})"
 
-def setup_schema(hosts: list, port: int = 9042) -> None:
+async def setup_schema(hosts: list, port: int = 9042):
     """Set up Cassandra schema.
     
     Args:
         hosts: List of Cassandra hosts
         port: Cassandra port
     """
-    from cassandra.cqlengine import connection
-    from cassandra.cluster import Cluster
-    
-    # Connect to Cassandra
-    cluster = Cluster(hosts, port=port)
-    session = cluster.connect()
-    
-    # Create keyspace if it doesn't exist
-    create_keyspace_simple('agent360', replication_factor=3)
-    
-    # Register connection
-    connection.register_connection('default', session=session)
-    
-    # Sync tables
-    sync_table(Agent)
-    sync_table(Task)
-    sync_table(Conversation)
-    sync_table(VectorEmbedding)
-    sync_table(AuditLog)
-    sync_table(Tenant)
-    sync_table(ModelMetrics)
-    sync_table(AgentSkill)
-    sync_table(DataCache)
-    sync_table(ResourceUsage)
-    sync_table(Integration)
-    sync_table(IntegrationLog)
+    try:
+        # Import here to avoid circular imports
+        from .connection import get_connection
+        
+        # Get database connection
+        db = get_connection()
+        await db.connect()
+        
+        # Create tables if they don't exist
+        for model in [
+            User, AuditLog, WorkflowExecution, MetricsLog,
+            RateLimitCounter, CacheStats, DataCache,
+            ResourceUsage, ServiceHealth, IntegrationStats, Integration
+        ]:
+            db.execute(f"""
+                CREATE TABLE IF NOT EXISTS {model.__table_name__} (
+                    {', '.join(f'{k} {v}' for k, v in model._columns.items())}
+                    PRIMARY KEY ({', '.join(model._primary_keys)})
+                )
+            """)
+            
+    except Exception as e:
+        logger.error(f"Failed to set up schema: {str(e)}")
+        raise

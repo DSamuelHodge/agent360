@@ -12,7 +12,7 @@ from opentelemetry import trace
 from prometheus_client import Counter, Histogram
 
 from ..database.schema import Integration
-from ..database.connection import CassandraConnection
+from ..database.connection import DatabaseConnection
 from ..infrastructure.redis_client import RedisClient
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class IntegrationManager:
     
     def __init__(
         self,
-        cassandra: CassandraConnection,
+        cassandra: DatabaseConnection,
         redis: RedisClient
     ):
         """Initialize integration manager.
@@ -62,15 +62,16 @@ class IntegrationManager:
         """Initialize integration manager."""
         # Load integrations from database
         query = "SELECT * FROM integrations"
-        async for row in self.cassandra.execute(query):
-            integration = Integration(**row)
-            self._integrations[integration.integration_type] = IntegrationConfig(
-                integration_type=integration.integration_type,
-                config=integration.config,
-                enabled=integration.enabled,
-                retry_policy=integration.retry_policy,
-                timeout_seconds=integration.timeout_seconds,
-                cache_ttl_seconds=integration.cache_ttl_seconds
+        result = await self.cassandra.execute(query)
+        
+        for row in result:
+            self._integrations[row['integration_type']] = IntegrationConfig(
+                integration_type=row['integration_type'],
+                config=row['config'],
+                enabled=row['enabled'],
+                retry_policy=row['retry_policy'],
+                timeout_seconds=row['timeout_seconds'],
+                cache_ttl_seconds=row['cache_ttl_seconds']
             )
     
     async def get_integration(

@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from opentelemetry import trace
 from prometheus_client import Counter, Histogram
 
-from ..database.connection import CassandraConnection
+from ..database.connection import DatabaseConnection
 from ..infrastructure.redis_client import RedisClient
 from ..infrastructure.redpanda_client import RedpandaProducer
 
@@ -70,18 +70,18 @@ class StateManager:
     
     def __init__(
         self,
-        cassandra: CassandraConnection,
+        database: DatabaseConnection,
         redis: RedisClient,
         events: RedpandaProducer
     ):
         """Initialize state manager.
         
         Args:
-            cassandra: Cassandra connection
+            database: Database connection
             redis: Redis client
             events: Redpanda event producer
         """
-        self.cassandra = cassandra
+        self.database = database
         self.redis = redis
         self.events = events
     
@@ -108,7 +108,7 @@ class StateManager:
                 
                 # Query database
                 query = "SELECT * FROM agent_states WHERE id = ?"
-                result = await self.cassandra.execute(query, [str(state_id)])
+                result = await self.database.execute(query, [str(state_id)])
                 row = await result.first()
                 
                 if not row:
@@ -172,7 +172,7 @@ class StateManager:
                         updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-                await self.cassandra.execute(
+                await self.database.execute(
                     query,
                     [
                         str(state.id),
@@ -229,7 +229,7 @@ class StateManager:
             try:
                 # Delete from database
                 query = "DELETE FROM agent_states WHERE id = ?"
-                await self.cassandra.execute(query, [str(state_id)])
+                await self.database.execute(query, [str(state_id)])
                 
                 # Delete from cache
                 cache_key = f"agent:state:{state_id}"
