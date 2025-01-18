@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from datetime import datetime
 import asyncio
 from typing import Dict, Any
+import json
 
 from src.integrations.integration_manager import IntegrationManager, IntegrationConfig
 from src.database.connection import DatabaseConnection
@@ -18,10 +19,12 @@ def mock_db():
 
 @pytest.fixture
 def mock_redis():
-    """Create mock redis client."""
+    """Mock Redis client."""
     mock = AsyncMock(spec=RedisClient)
-    mock.get = AsyncMock()
+    mock.get = AsyncMock(return_value=None)  # Default to cache miss
     mock.set = AsyncMock()
+    mock.delete = AsyncMock()
+    mock.keys = AsyncMock(return_value=["key1", "key2"])  # Return some keys
     return mock
 
 @pytest.fixture
@@ -155,7 +158,7 @@ async def test_execute_integration_cached(integration_manager, mock_redis, sampl
     
     # Mock cached result
     cached_result = {'cached': 'result'}
-    mock_redis.get.return_value = cached_result
+    mock_redis.get.return_value = json.dumps(cached_result)  # Return serialized result
     
     # Execute operation
     result = await integration_manager.execute_integration(
@@ -258,3 +261,125 @@ async def test_delete_integration_not_found(integration_manager):
     """Test deleting non-existent integration."""
     with pytest.raises(ValueError, match="not found"):
         await integration_manager.delete_integration('nonexistent')
+
+@pytest.mark.asyncio
+async def test_register_integration_invalid_config(integration_manager):
+    """Test registering integration with invalid config."""
+    with pytest.raises(ValueError, match="Invalid config format"):
+        await integration_manager.register_integration(
+            integration_type="test",
+            config="not_a_dict"  # Should be dict
+        )
+
+@pytest.mark.asyncio
+async def test_register_integration_invalid_retry_policy(integration_manager):
+    """Test registering integration with invalid retry policy."""
+    with pytest.raises(ValueError, match="Invalid retry policy"):
+        await integration_manager.register_integration(
+            integration_type="test",
+            config={"key": "value"},
+            retry_policy={"invalid": "policy"}  # Missing required fields
+        )
+
+@pytest.mark.asyncio
+async def test_register_integration_invalid_timeouts(integration_manager):
+    """Test registering integration with invalid timeouts."""
+    with pytest.raises(ValueError, match="Timeout must be positive"):
+        await integration_manager.register_integration(
+            integration_type="test",
+            config={"key": "value"},
+            timeout_seconds=-1
+        )
+    
+    with pytest.raises(ValueError, match="Cache TTL must be positive"):
+        await integration_manager.register_integration(
+            integration_type="test",
+            config={"key": "value"},
+            cache_ttl_seconds=-1
+        )
+
+@pytest.mark.asyncio
+async def test_execute_integration_retry_behavior(integration_manager, mock_redis):
+    """Test detailed retry behavior."""
+    # Register integration with retry policy
+    await integration_manager.register_integration(
+        integration_type="test",
+        config={"key": "value"},
+        retry_policy={
+            "max_retries": 2,
+            "delay_seconds": 0.1,
+            "max_delay_seconds": 0.5,
+            "backoff_factor": 2
+        }
+    )
+    
+    # Mock operation that fails twice then succeeds
+    attempt = 0
+    async def mock_operation(*args, **kwargs):
+        nonlocal attempt
+        attempt += 1
+        if attempt <= 2:
+            raise ValueError(f"Attempt {attempt} failed")
+        return {"success": True}
+        
+    with patch.object(integration_manager, '_execute_single_operation', side_effect=mock_operation):
+        result = await integration_manager.execute_integration(
+            integration_type="test",
+            operation="test_op",
+            params={}
+        )
+        
+        assert result["success"] is True
+        assert attempt == 3  # Two failures + one success
+
+@pytest.mark.asyncio
+async def test_cache_invalidation_on_update(integration_manager, mock_redis, sample_integration_config):
+    """Test that cache is invalidated when integration is updated."""
+    # Register integration
+    await integration_manager.register_integration(
+        integration_type=sample_integration_config['integration_type'],
+        config=sample_integration_config['config']
+    )
+    
+    # Cache some results
+    mock_redis.get.return_value = '{"cached": "result"}'
+    
+    # Update integration
+    await integration_manager.update_integration(
+        integration_type=sample_integration_config['integration_type'],
+        config={"new": "config"}
+    )
+    
+    # Verify cache was cleared
+    mock_redis.delete.assert_called()
+    
+    # Execute should miss cache
+    mock_redis.get.return_value = None
+    result = await integration_manager.execute_integration(
+        integration_type=sample_integration_config['integration_type'],
+        operation="test_op",
+        params={}
+    )
+    assert "cached" not in result
+
+@pytest.mark.asyncio
+async def test_cache_expiration(integration_manager, mock_redis, sample_integration_config):
+    """Test cache expiration behavior."""
+    # Register integration with short TTL
+    await integration_manager.register_integration(
+        integration_type=sample_integration_config['integration_type'],
+        config=sample_integration_config['config'],
+        cache_ttl_seconds=1
+    )
+    
+    # Cache result
+    mock_redis.get.return_value = None
+    await integration_manager.execute_integration(
+        integration_type=sample_integration_config['integration_type'],
+        operation="test_op",
+        params={}
+    )
+    
+    # Verify TTL was set
+    mock_redis.set.assert_called_once()
+    assert mock_redis.set.call_args[1]['ex'] == 1

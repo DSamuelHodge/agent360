@@ -196,17 +196,29 @@ class AgentWorkflow:
     
     async def _update_state(self):
         """Update workflow state."""
-        try:
-            result = await workflow.execute_activity(
-                update_state,
-                self._state,
-                retry_policy=self._retry_policy,
-                start_to_close_timeout=30
-            )
-            self._state = result
-        except Exception as e:
-            logger.error(f"State update failed: {str(e)}")
-            raise
+        with WORKFLOW_LATENCY.labels('state_update').time():
+            try:
+                result = await workflow.execute_activity(
+                    update_state,
+                    self._state,
+                    retry_policy=self._retry_policy,
+                    start_to_close_timeout=30
+                )
+                
+                WORKFLOW_STEPS.labels(
+                    step='state_update',
+                    status='success'
+                ).inc()
+                
+                return result
+                
+            except Exception as e:
+                WORKFLOW_STEPS.labels(
+                    step='state_update',
+                    status='error'
+                ).inc()
+                logger.error(f"State update failed: {str(e)}")
+                raise
 
 @activity.defn
 async def execute_reasoning(context: AgentContext) -> Dict[str, Any]:

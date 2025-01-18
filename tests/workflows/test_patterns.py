@@ -121,6 +121,69 @@ async def test_parallel_reasoning(mock_reasoning, mock_event_store, sample_conte
     assert result["confidence"] == 0.75  # Average of 0.7 and 0.8
 
 @pytest.mark.asyncio
+async def test_parallel_reasoning_error_handling(mock_reasoning, mock_event_store, sample_context):
+    """Test parallel reasoning error handling."""
+    async def good_approach(context):
+        return {"thought": "good", "confidence": 0.8}
+    
+    async def bad_approach(context):
+        raise ValueError("Test error")
+    
+    pattern = ParallelReasoning(mock_reasoning, [good_approach, bad_approach])
+    
+    result = await pattern.execute(sample_context, "test prompt")
+    
+    # Should still get results from good approach
+    assert len(result["thoughts"]) == 1
+    assert result["thoughts"][0]["thought"] == "good"
+    assert result["confidence"] == 0.8
+
+@pytest.mark.asyncio
+async def test_parallel_reasoning_empty_approaches(mock_reasoning, mock_event_store, sample_context):
+    """Test parallel reasoning with no approaches."""
+    pattern = ParallelReasoning(mock_reasoning, [])
+    
+    with pytest.raises(ValueError, match="No reasoning approaches provided"):
+        await pattern.execute(sample_context, "test prompt")
+
+@pytest.mark.asyncio
+async def test_parallel_reasoning_execution(mock_reasoning, mock_event_store, sample_context):
+    """Test that approaches run in parallel."""
+    start_times = []
+    end_times = []
+    
+    async def slow_approach(context):
+        start = asyncio.get_event_loop().time()
+        start_times.append(start)
+        await asyncio.sleep(0.1)
+        end = asyncio.get_event_loop().time()
+        end_times.append(end)
+        return {"thought": "slow", "confidence": 0.7}
+    
+    async def fast_approach(context):
+        start = asyncio.get_event_loop().time()
+        start_times.append(start)
+        end = asyncio.get_event_loop().time()
+        end_times.append(end)
+        return {"thought": "fast", "confidence": 0.8}
+    
+    pattern = ParallelReasoning(mock_reasoning, [slow_approach, fast_approach])
+    
+    result = await pattern.execute(sample_context, "test prompt")
+    
+    # Both approaches should start at roughly the same time
+    assert len(start_times) == 2
+    assert abs(start_times[0] - start_times[1]) < 0.01  # Within 10ms
+    
+    # Fast approach should finish before slow approach
+    assert len(end_times) == 2
+    assert min(end_times) < max(end_times)
+    
+    # Verify results are combined correctly
+    assert len(result["thoughts"]) == 2
+    assert result["confidence"] == 0.75  # (0.7 + 0.8) / 2
+
+@pytest.mark.asyncio
 async def test_workflow_patterns_factory(mock_reasoning, mock_event_store):
     """Test workflow patterns factory."""
     patterns = WorkflowPatterns(mock_reasoning, mock_event_store)

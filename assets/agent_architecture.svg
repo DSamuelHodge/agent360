@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="800" height="600" fill="#f8f9fa"/>
+  
+  <!-- Title -->
+  <text x="400" y="50" font-family="Arial" font-size="24" text-anchor="middle" fill="#212529">Agent360 Architecture</text>
+  
+  <!-- Core Components -->
+  <g transform="translate(100,100)">
+    <!-- Agent Runtime -->
+    <rect x="0" y="0" width="200" height="150" rx="10" fill="#007bff" opacity="0.8"/>
+    <text x="100" y="40" font-family="Arial" font-size="16" fill="white" text-anchor="middle">Agent Runtime</text>
+    <text x="100" y="70" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Model Service</text>
+    <text x="100" y="90" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Orchestration Layer</text>
+    <text x="100" y="110" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Tools Layer</text>
+  </g>
+  
+  <!-- Infrastructure -->
+  <g transform="translate(400,100)">
+    <!-- Infrastructure Components -->
+    <rect x="0" y="0" width="200" height="150" rx="10" fill="#28a745" opacity="0.8"/>
+    <text x="100" y="40" font-family="Arial" font-size="16" fill="white" text-anchor="middle">Infrastructure</text>
+    <text x="100" y="70" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Temporal</text>
+    <text x="100" y="90" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Kong API Gateway</text>
+    <text x="100" y="110" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Redpanda</text>
+  </g>
+  
+  <!-- Storage -->
+  <g transform="translate(100,300)">
+    <!-- Storage Layer -->
+    <rect x="0" y="0" width="200" height="150" rx="10" fill="#dc3545" opacity="0.8"/>
+    <text x="100" y="40" font-family="Arial" font-size="16" fill="white" text-anchor="middle">Storage</text>
+    <text x="100" y="70" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Cassandra</text>
+    <text x="100" y="90" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Redis</text>
+  </g>
+  
+  <!-- Monitoring -->
+  <g transform="translate(400,300)">
+    <!-- Monitoring Stack -->
+    <rect x="0" y="0" width="200" height="150" rx="10" fill="#6610f2" opacity="0.8"/>
+    <text x="100" y="40" font-family="Arial" font-size="16" fill="white" text-anchor="middle">Monitoring</text>
+    <text x="100" y="70" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Prometheus</text>
+    <text x="100" y="90" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Grafana</text>
+    <text x="100" y="110" font-family="Arial" font-size="12" fill="white" text-anchor="middle">OpenTelemetry</text>
+  </g>
+  
+  <!-- Connecting Lines -->
+  <g stroke="#6c757d" stroke-width="2">
+    <!-- Runtime to Infrastructure -->
+    <line x1="300" y1="175" x2="400" y2="175"/>
+    <!-- Runtime to Storage -->
+    <line x1="200" y1="250" x2="200" y2="300"/>
+    <!-- Infrastructure to Storage -->
+    <line x1="500" y1="250" x2="500" y2="300"/>
+    <!-- Storage to Monitoring -->
+    <line x1="300" y1="375" x2="400" y2="375"/>
+  </g>
+</svg>

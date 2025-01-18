@@ -3,6 +3,7 @@ import os
 from functools import lru_cache
 from typing import Optional, List
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 class Settings(BaseSettings):
     """Application settings."""
@@ -29,10 +30,10 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     debug: bool = True
     
-    class Config:
-        """Pydantic config."""
-        env_prefix = "AGENT360_"
-        case_sensitive = False
+    model_config = ConfigDict(
+        env_prefix="AGENT360_",
+        case_sensitive=False
+    )
 
 @lru_cache()
 def get_settings() -> Settings:

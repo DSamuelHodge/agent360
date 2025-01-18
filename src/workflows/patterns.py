@@ -6,6 +6,7 @@ import logging
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from uuid import UUID
+import asyncio
 
 from opentelemetry import trace
 from opentelemetry.trace import Span
@@ -212,7 +213,7 @@ class ParallelReasoning(WorkflowPattern):
         """
         super().__init__(reasoning_engine)
         self.approaches = approaches
-    
+
     async def execute(
         self,
         context: AgentContext,
@@ -226,33 +227,52 @@ class ParallelReasoning(WorkflowPattern):
             
         Returns:
             Combined reasoning result
-        """
-        with tracer.start_as_current_span("pattern.parallel_reasoning") as span:
-            span.set_attribute("context.tenant_id", context.state.tenant_id)
             
-            try:
-                # Execute all approaches
-                results = []
-                for approach in self.approaches:
-                    result = await approach(context)
-                    results.append(result)
+        Raises:
+            ValueError: If no reasoning approaches provided
+        """
+        if not self.approaches:
+            raise ValueError("No reasoning approaches provided")
+
+        tasks = []
+        for approach in self.approaches:
+            tasks.append(self._execute_approach(approach, context))
+            
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Filter out errors
+        valid_results = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Parallel reasoning failed: {str(result)}")
+            else:
+                valid_results.append(result)
                 
-                # Combine results
-                combined = await self._combine_results(results)
-                
-                PATTERN_OPERATIONS.labels(
-                    pattern="parallel_reasoning",
-                    operation="execute"
-                ).inc()
-                
-                return combined
-                
-            except Exception as e:
-                logger.error(f"Parallel reasoning failed: {e}")
-                span.set_status(Status(StatusCode.ERROR))
-                span.record_exception(e)
-                raise
-    
+        if not valid_results:
+            raise ValueError("All reasoning approaches failed")
+            
+        return await self._combine_results(valid_results)
+        
+    async def _execute_approach(
+        self,
+        approach: Callable,
+        context: AgentContext
+    ) -> Dict[str, Any]:
+        """Execute a single approach.
+        
+        Args:
+            approach: Reasoning approach
+            context: Agent context
+            
+        Returns:
+            Approach result
+        """
+        try:
+            return await approach(context)
+        except Exception as e:
+            logger.error(f"Approach failed: {str(e)}")
+            raise
+
     async def _combine_results(
         self,
         results: List[Dict[str, Any]]
@@ -272,14 +292,8 @@ class ParallelReasoning(WorkflowPattern):
         )
         avg_confidence = total_confidence / len(results)
         
-        # Combine thoughts
-        thoughts = [
-            result.get("thought", "")
-            for result in results
-        ]
-        
         return {
-            "thoughts": thoughts,
+            "thoughts": results,
             "confidence": avg_confidence
         }
 

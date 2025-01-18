@@ -3,6 +3,7 @@ Integration Manager for Agent360.
 Handles integration lifecycle and configuration.
 """
 import asyncio
+import json
 import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
@@ -58,6 +59,59 @@ class IntegrationManager:
         self.redis = redis
         self._integrations: Dict[str, IntegrationConfig] = {}
         
+    def _validate_config(self, config: Any) -> None:
+        """Validate integration configuration.
+        
+        Args:
+            config: Configuration to validate
+            
+        Raises:
+            ValueError: If config is invalid
+        """
+        if not isinstance(config, dict):
+            raise ValueError("Invalid config format - must be a dictionary")
+            
+    def _validate_retry_policy(self, policy: Optional[Dict[str, Any]]) -> None:
+        """Validate retry policy configuration.
+        
+        Args:
+            policy: Retry policy to validate
+            
+        Raises:
+            ValueError: If policy is invalid
+        """
+        if policy is None:
+            return
+        required = {"max_retries", "delay_seconds"}
+        if not isinstance(policy, dict) or not all(k in policy for k in required):
+            raise ValueError("Invalid retry policy - must contain max_retries and delay_seconds")
+            
+    def _validate_timeouts(self, timeout: int, cache_ttl: int) -> None:
+        """Validate timeout values.
+        
+        Args:
+            timeout: Operation timeout
+            cache_ttl: Cache TTL
+            
+        Raises:
+            ValueError: If timeouts are invalid
+        """
+        if timeout <= 0:
+            raise ValueError("Timeout must be positive")
+        if cache_ttl <= 0:
+            raise ValueError("Cache TTL must be positive")
+            
+    async def _clear_integration_cache(self, integration_type: str) -> None:
+        """Clear all cached results for an integration.
+        
+        Args:
+            integration_type: Integration type to clear cache for
+        """
+        pattern = f"integration:{integration_type}:*"
+        keys = await self.redis.keys(pattern)
+        if keys:
+            await asyncio.gather(*[self.redis.delete(key) for key in keys])
+
     async def initialize(self):
         """Initialize integration manager."""
         # Load integrations from database
@@ -106,7 +160,15 @@ class IntegrationManager:
             retry_policy: Retry policy configuration
             timeout_seconds: Operation timeout
             cache_ttl_seconds: Cache TTL
+            
+        Raises:
+            ValueError: If configuration is invalid
         """
+        # Validate inputs
+        self._validate_config(config)
+        self._validate_retry_policy(retry_policy)
+        self._validate_timeouts(timeout_seconds, cache_ttl_seconds)
+        
         # Create integration record
         integration = Integration(
             integration_type=integration_type,
@@ -152,7 +214,7 @@ class IntegrationManager:
             timeout_seconds=timeout_seconds,
             cache_ttl_seconds=cache_ttl_seconds
         )
-    
+
     async def update_integration(
         self,
         integration_type: str,
@@ -171,47 +233,69 @@ class IntegrationManager:
             retry_policy: New retry policy
             timeout_seconds: New timeout
             cache_ttl_seconds: New cache TTL
+            
+        Raises:
+            ValueError: If integration not found or configuration invalid
         """
-        integration = self._integrations.get(integration_type)
+        integration = await self.get_integration(integration_type)
         if not integration:
             raise ValueError(f"Integration {integration_type} not found")
             
-        # Update fields
+        # Validate new values
         if config is not None:
-            integration.config.update(config)
-        if enabled is not None:
-            integration.enabled = enabled
+            self._validate_config(config)
         if retry_policy is not None:
-            integration.retry_policy = retry_policy
+            self._validate_retry_policy(retry_policy)
+        if timeout_seconds is not None or cache_ttl_seconds is not None:
+            self._validate_timeouts(
+                timeout_seconds or integration.timeout_seconds,
+                cache_ttl_seconds or integration.cache_ttl_seconds
+            )
+            
+        # Build update query
+        updates = []
+        params = []
+        if config is not None:
+            updates.append("config = ?")
+            params.append(config)
+        if enabled is not None:
+            updates.append("enabled = ?")
+            params.append(enabled)
+        if retry_policy is not None:
+            updates.append("retry_policy = ?")
+            params.append(retry_policy)
         if timeout_seconds is not None:
-            integration.timeout_seconds = timeout_seconds
+            updates.append("timeout_seconds = ?")
+            params.append(timeout_seconds)
         if cache_ttl_seconds is not None:
-            integration.cache_ttl_seconds = cache_ttl_seconds
+            updates.append("cache_ttl_seconds = ?")
+            params.append(cache_ttl_seconds)
+            
+        if not updates:
+            return
             
         # Update database
-        query = """
+        query = f"""
             UPDATE integrations
-            SET config = ?,
-                enabled = ?,
-                retry_policy = ?,
-                timeout_seconds = ?,
-                cache_ttl_seconds = ?,
-                updated_at = ?
+            SET {', '.join(updates)}
             WHERE integration_type = ?
         """
-        await self.cassandra.execute(
-            query,
-            (
-                integration.config,
-                integration.enabled,
-                integration.retry_policy,
-                integration.timeout_seconds,
-                integration.cache_ttl_seconds,
-                datetime.utcnow(),
-                integration_type
-            )
+        params.append(integration_type)
+        await self.cassandra.execute(query, params)
+        
+        # Clear cache
+        await self._clear_integration_cache(integration_type)
+        
+        # Update local cache
+        self._integrations[integration_type] = IntegrationConfig(
+            integration_type=integration_type,
+            config=config if config is not None else integration.config,
+            enabled=enabled if enabled is not None else integration.enabled,
+            retry_policy=retry_policy if retry_policy is not None else integration.retry_policy,
+            timeout_seconds=timeout_seconds if timeout_seconds is not None else integration.timeout_seconds,
+            cache_ttl_seconds=cache_ttl_seconds if cache_ttl_seconds is not None else integration.cache_ttl_seconds
         )
-    
+
     async def delete_integration(self, integration_type: str):
         """Delete integration.
         
@@ -227,13 +311,16 @@ class IntegrationManager:
         
         # Remove from local cache
         del self._integrations[integration_type]
-    
+        
+        # Clear cache
+        await self._clear_integration_cache(integration_type)
+
     async def execute_integration(
         self,
         integration_type: str,
         operation: str,
         params: Dict[str, Any]
-    ) -> Any:
+    ) -> Dict[str, Any]:
         """Execute integration operation.
         
         Args:
@@ -243,69 +330,48 @@ class IntegrationManager:
             
         Returns:
             Operation result
+            
+        Raises:
+            ValueError: If integration not found or disabled
+            TimeoutError: If operation times out
         """
-        integration = self._integrations.get(integration_type)
+        integration = await self.get_integration(integration_type)
         if not integration:
             raise ValueError(f"Integration {integration_type} not found")
             
         if not integration.enabled:
             raise ValueError(f"Integration {integration_type} is disabled")
-        
+            
         # Check cache
-        cache_key = f"integration:{integration_type}:{operation}:{hash(str(params))}"
-        cached_result = await self.redis.get(cache_key)
-        if cached_result:
-            INTEGRATION_OPERATIONS.labels(
-                integration_type=integration_type,
-                operation=operation,
-                status='cache_hit'
-            ).inc()
-            return cached_result
-        
+        cache_key = f"integration:{integration_type}:{operation}:{str(params)}"
+        cached = await self.redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+            
+        # Execute with timeout
         try:
-            with INTEGRATION_LATENCY.labels(
-                integration_type=integration_type,
-                operation=operation
-            ).time():
-                # Execute operation with timeout
-                result = await asyncio.wait_for(
-                    self._execute_operation(integration, operation, params),
-                    timeout=integration.timeout_seconds
-                )
-                
-            # Cache result
-            await self.redis.set(
-                cache_key,
-                result,
-                ttl=integration.cache_ttl_seconds
+            result = await asyncio.wait_for(
+                self._execute_operation(integration, operation, params),
+                timeout=integration.timeout_seconds
             )
-            
-            INTEGRATION_OPERATIONS.labels(
-                integration_type=integration_type,
-                operation=operation,
-                status='success'
-            ).inc()
-            
-            return result
-            
-        except Exception as e:
-            INTEGRATION_OPERATIONS.labels(
-                integration_type=integration_type,
-                operation=operation,
-                status='error'
-            ).inc()
-            
-            logger.error(
-                f"Integration operation failed: {integration_type}.{operation}: {e}"
-            )
-            raise
-    
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Operation timed out after {integration.timeout_seconds} seconds")
+        
+        # Cache result
+        await self.redis.set(
+            cache_key,
+            json.dumps(result),
+            ex=integration.cache_ttl_seconds
+        )
+        
+        return result
+
     async def _execute_operation(
         self,
         integration: IntegrationConfig,
         operation: str,
         params: Dict[str, Any]
-    ) -> Any:
+    ) -> Dict[str, Any]:
         """Execute integration operation with retry policy.
         
         Args:
@@ -316,41 +382,35 @@ class IntegrationManager:
         Returns:
             Operation result
         """
-        if not integration.retry_policy:
-            # Execute without retries
-            return await self._execute_single_operation(
-                integration,
-                operation,
-                params
-            )
-            
-        retry_count = 0
-        last_error = None
+        retry_policy = integration.retry_policy or {
+            "max_retries": 3,
+            "delay_seconds": 1
+        }
         
-        while retry_count < integration.retry_policy.get('max_retries', 3):
+        attempt = 0
+        max_retries = retry_policy["max_retries"]
+        delay = retry_policy["delay_seconds"]
+        max_delay = retry_policy.get("max_delay_seconds", 5)
+        backoff = retry_policy.get("backoff_factor", 2)
+        
+        while True:
             try:
-                return await self._execute_single_operation(
-                    integration,
-                    operation,
-                    params
-                )
+                return await self._execute_single_operation(integration, operation, params)
             except Exception as e:
-                last_error = e
-                retry_count += 1
-                
-                if retry_count < integration.retry_policy.get('max_retries', 3):
-                    # Wait before retry
-                    delay = integration.retry_policy.get('delay_seconds', 1)
-                    await asyncio.sleep(delay * (2 ** (retry_count - 1)))
-        
-        raise last_error
-    
+                attempt += 1
+                if attempt > max_retries:
+                    raise
+                    
+                # Wait before retry with exponential backoff
+                retry_delay = min(delay * (backoff ** (attempt - 1)), max_delay)
+                await asyncio.sleep(retry_delay)
+
     async def _execute_single_operation(
         self,
         integration: IntegrationConfig,
         operation: str,
         params: Dict[str, Any]
-    ) -> Any:
+    ) -> Dict[str, Any]:
         """Execute single integration operation.
         
         Args:
