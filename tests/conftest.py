@@ -4,97 +4,89 @@ Test configuration and shared fixtures for Agent360 tests.
 import pytest
 import asyncio
 import os
-from typing import Generator, Any
+from typing import Generator, Any, AsyncGenerator
 from datetime import datetime
+from fastapi.testclient import TestClient
+
+from src.api.main import app
+from src.auth.authentication_service import AuthenticationService
+from src.workflows.workflow_service import WorkflowService
+from tests.fixtures.mock_services import (
+    mock_db,
+    mock_redis_service,
+    mock_event_store,
+    mock_model_client,
+    mock_settings,
+)
+
+# Re-export fixtures
+__all__ = [
+    'mock_db',
+    'mock_redis_service',
+    'mock_event_store',
+    'mock_model_client',
+    'mock_settings',
+]
 
 # Performance test configurations
-PERFORMANCE_CONFIG = {
-    "auth": {
-        "users": 100,
-        "spawn_rate": 10,
-        "run_time": "5m",
-        "host": "http://localhost:8000"
-    },
-    "workflow": {
-        "users": 50,
-        "spawn_rate": 5,
-        "run_time": "10m",
-        "host": "http://localhost:8000"
-    }
-}
+PERF_TEST_DURATION = int(os.getenv('PERF_TEST_DURATION', '60'))  # seconds
+PERF_TEST_USERS = int(os.getenv('PERF_TEST_USERS', '10'))  # concurrent users
+PERF_TEST_RAMPUP = int(os.getenv('PERF_TEST_RAMPUP', '30'))  # seconds
+PERF_TEST_REQUESTS = int(os.getenv('PERF_TEST_REQUESTS', '1000'))  # total requests
 
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, Any, None]:
-    """Create an event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# Use pytest-asyncio's event loop
+pytest_plugins = ['pytest_asyncio']
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope='session')
+async def async_session():
+    """Create an async session for managing async resources."""
+    # Setup
+    yield
+    # Cleanup
+
+@pytest.fixture
+async def test_client(
+    mock_db,
+    mock_event_store,
+    mock_settings
+) -> AsyncGenerator[TestClient, None]:
+    """Create test client with mocked services."""
+    # Setup authentication service
+    auth_service = AuthenticationService(mock_db)
+    app.dependency_overrides[AuthenticationService] = lambda: auth_service
+    
+    # Setup workflow service
+    workflow_service = WorkflowService(mock_event_store)
+    app.dependency_overrides[WorkflowService] = lambda: workflow_service
+    
+    # Setup test client
+    async with TestClient(app) as client:
+        yield client
+        
+    # Cleanup
+    app.dependency_overrides.clear()
+
+@pytest.fixture
 def performance_config() -> dict:
     """Get performance test configuration."""
-    return PERFORMANCE_CONFIG
+    return {
+        'duration': PERF_TEST_DURATION,
+        'users': PERF_TEST_USERS,
+        'rampup': PERF_TEST_RAMPUP,
+        'requests': PERF_TEST_REQUESTS
+    }
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def test_timestamp() -> str:
     """Generate timestamp for test runs."""
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.now().strftime('%Y%m%d_%H%M%S')
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def test_output_dir(test_timestamp: str) -> str:
     """Create and return test output directory."""
     output_dir = os.path.join(
-        "tests",
-        "results",
-        f"performance_{test_timestamp}"
+        'test_results',
+        test_timestamp
     )
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
-
-def pytest_configure(config):
-    """Configure test markers."""
-    config.addinivalue_line(
-        "markers",
-        "performance: mark test as a performance test"
-    )
-    config.addinivalue_line(
-        "markers",
-        "load_test: mark test as a load test"
-    )
-    config.addinivalue_line(
-        "markers",
-        "stress_test: mark test as a stress test"
-    )
-    config.addinivalue_line(
-        "markers",
-        "endurance_test: mark test as an endurance test"
-    )
-    config.addinivalue_line(
-        "markers",
-        "spike_test: mark test as a spike test"
-    )
-
-import pytest
-import redis
-from typing import AsyncGenerator
-
-from src.infrastructure.model_client import ModelClient
-from src.infrastructure.redis_client import RedisClient
-from src.auth.authentication_service import AuthenticationService
-
-@pytest.fixture
-async def model_client() -> ModelClient:
-    return ModelClient(api_key="test_key", model="gpt-4")
-
-@pytest.fixture
-async def redis_client() -> RedisClient:
-    client = redis.Redis(host='localhost', port=6379, db=0)
-    yield RedisClient(client)
-    client.close()
-
-@pytest.fixture
-def auth_service() -> AuthenticationService:
-    return AuthenticationService(
-        secret_key="test_secret_key",
-        algorithm="HS256"
-    )

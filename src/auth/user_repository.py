@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from uuid import UUID, uuid4
 
-from ..database.schema import User
-from ..database.connection import get_connection, DatabaseConnection
+from src.database.schema import User
+from src.database.connection import get_connection, DatabaseConnection
 
 logger = logging.getLogger(__name__)
 

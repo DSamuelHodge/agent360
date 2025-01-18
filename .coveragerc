@@ -1,6 +1,6 @@
 [run]
 source = src
-omit =
+omit = 
     src/infrastructure/redpanda_client.py
     src/infrastructure/model_client.py
     src/infrastructure/redis_client.py
@@ -8,11 +8,11 @@ omit =
     setup.py
 
 [report]
-exclude_lines =
+exclude_lines = 
     pragma: no cover
     def __repr__
     raise NotImplementedError
-    if __name__ == .__main__.:
+    if __name__ == '__main__':
     pass
     raise ImportError
 

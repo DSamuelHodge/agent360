@@ -144,6 +144,7 @@ docs/_build/
 docs/generated/
 
 # Backup files
+backup/
 *.bak
 *.swp
 *.swo
@@ -204,6 +205,10 @@ vector_db_data/
 # Monitoring
 prometheus_data/
 grafana_data/
+
+# Coverage reports
+coverage_html/
+htmlcov/
 
 # Compiled files
 *.com

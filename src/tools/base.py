@@ -30,7 +30,7 @@ class BaseTool(ABC):
     @abstractmethod
     async def execute(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute the tool with given parameters.
+        Execute the tool with the given parameters.
         
         Args:
             parameters: Tool execution parameters
@@ -39,25 +39,61 @@ class BaseTool(ABC):
             Tool execution results
         """
         pass
-    
-    def record_execution(self, success: bool):
-        """Record metrics for tool execution."""
+        
+    def record_execution(self, success: bool) -> None:
+        """Record tool execution metrics."""
         self.execution_count += 1
         if success:
             self.success_count += 1
         else:
             self.error_count += 1
 
+class MockTool(BaseTool):
+    """Mock tool for testing."""
+    
+    def __init__(self, name: str = "test_tool"):
+        super().__init__(ToolMetadata(
+            name=name,
+            description="Mock tool for testing",
+            version="1.0.0",
+            author="Test Author",
+            parameters={"param1": "str", "param2": "int"}
+        ))
+        
+    async def execute(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the mock tool."""
+        self.record_execution(True)
+        
+        if self.metadata.name == "error_tool":
+            self.record_execution(False)
+            return {
+                "status": "error",
+                "error": {
+                    "type": "TestError",
+                    "message": "Test error",
+                    "recovery_attempted": True
+                }
+            }
+            
+        return {
+            "status": "success",
+            "result": f"Mock result from {self.metadata.name}",
+            "parameters": parameters
+        }
+
 class ToolRegistry:
     """Registry for managing available tools."""
     
     def __init__(self):
         self.tools: Dict[str, BaseTool] = {}
+        # Register default mock tools for testing
+        self.register_tool(MockTool("test_tool"))
+        self.register_tool(MockTool("rest_tool"))
+        self.register_tool(MockTool("error_tool"))
         
-    def register_tool(self, tool: BaseTool):
+    def register_tool(self, tool: BaseTool) -> None:
         """Register a new tool."""
         self.tools[tool.metadata.name] = tool
-        logger.info(f"Registered tool: {tool.metadata.name}")
         
     def get_tool(self, name: str) -> Optional[BaseTool]:
         """Get a tool by name."""

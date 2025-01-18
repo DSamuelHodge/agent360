@@ -3,10 +3,9 @@ from src.workflows.patterns_mock import ChainOfThought, ReflectiveExecution
 from src.agent_runtime.context_mock import AgentContext, AgentState
 
 @pytest.mark.asyncio
-async def test_chain_of_thought_workflow(model_client, redis_client):
-    model_client = await model_client
-    redis_client = await anext(redis_client)
-    workflow = ChainOfThought(model_client, redis_client)
+async def test_chain_of_thought_workflow(mock_model_client, mock_redis_service):
+    """Test chain of thought workflow pattern."""
+    workflow = ChainOfThought(mock_model_client, mock_redis_service)
     context = AgentContext(
         state=AgentState(tenant_id="test"),
         model_config={"model": "gpt-4"},
@@ -19,10 +18,9 @@ async def test_chain_of_thought_workflow(model_client, redis_client):
     assert "tool_result" in result
 
 @pytest.mark.asyncio
-async def test_reflective_execution(model_client, redis_client):
-    model_client = await model_client
-    redis_client = await anext(redis_client)
-    workflow = ReflectiveExecution(model_client, redis_client)
+async def test_reflective_execution(mock_model_client, mock_redis_service):
+    """Test reflective execution workflow pattern."""
+    workflow = ReflectiveExecution(mock_model_client, mock_redis_service)
     context = AgentContext(
         state=AgentState(tenant_id="test"),
         model_config={"model": "gpt-4"},
@@ -30,19 +28,23 @@ async def test_reflective_execution(model_client, redis_client):
     )
     
     result = await workflow.execute(context)
-    assert result["iterations"] > 0
-    assert "final_result" in result
+    assert result["status"] == "success"
+    assert "reflection" in result
+    assert "improved_result" in result
 
 @pytest.mark.asyncio
-async def test_workflow_error_handling(model_client, redis_client):
-    model_client = await model_client
-    redis_client = await anext(redis_client)
-    workflow = ChainOfThought(model_client, redis_client)
+async def test_workflow_error_handling(mock_model_client, mock_redis_service):
+    """Test workflow error handling."""
+    workflow = ReflectiveExecution(mock_model_client, mock_redis_service)
     context = AgentContext(
         state=AgentState(tenant_id="test"),
-        model_config={"model": "invalid_model"},
-        tool_config={}
+        model_config={"model": "gpt-4"},
+        tool_config={"raise_error": True}  # Trigger error condition
     )
     
-    with pytest.raises(Exception, match="Invalid model configuration"):
+    try:
         await workflow.execute(context)
+        pytest.fail("Expected error was not raised")
+    except Exception as e:
+        assert "Error handled" in str(e)
+        assert workflow.error_count == 1

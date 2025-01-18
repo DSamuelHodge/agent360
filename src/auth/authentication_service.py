@@ -8,8 +8,8 @@ import bcrypt
 import jwt
 from pydantic import BaseModel
 
-from .user_repository import UserRepository
-from ..config import get_settings
+from src.auth.user_repository import UserRepository
+from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
