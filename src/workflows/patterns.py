@@ -100,7 +100,7 @@ class ChainOfThought(WorkflowPattern):
                     ],
                     prompt="Reflect on the reasoning process and identify potential improvements."
                 )
-                
+                .
                 # Final response
                 response = {
                     "reasoning": result,

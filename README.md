@@ -4,7 +4,11 @@
 Agent360 is a scalable, reliable, and observable infrastructure for deploying AI agents in an enterprise environment. It leverages modern technologies including Kubernetes, Temporal, Kong, Redpanda, Cassandra, and Redis.
 
 <div align="center">
-  <img src="assets/agent_architecture.svg" alt="Agent360 Architecture" width="800">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/agent_architecture_stack.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/agent_architecture._stack.svg">
+    <img alt="Agent360 Architecture" src="assets/agent_architecture_stack.svg" width="800">
+  </picture>
 </div>
 
 ## Key Components

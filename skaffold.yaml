@@ -1,0 +1,17 @@
+apiVersion: skaffold/v2beta29
+kind: Config
+metadata:
+  name: agent360
+build:
+  artifacts:
+    - image: ghcr.io/your-org/agent360
+      docker:
+        dockerfile: Dockerfile
+deploy:
+  helm:
+    releases:
+      - name: agent360
+        chartPath: helm/agent360
+        namespace: agent360
+        valuesFiles:
+          - helm/agent360/values.yaml

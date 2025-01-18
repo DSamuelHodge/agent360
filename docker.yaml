@@ -1,0 +1,56 @@
+version: '3.8'
+services:
+  agent360-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/your-org/agent360:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_HOST=redis
+      - CASSANDRA_HOST=cassandra
+      - KAFKA_BROKERS=redpanda:9092
+      - TEMPORAL_HOST=temporal
+    depends_on:
+      - redis
+      - cassandra
+      - redpanda
+      - temporal
+
+  redis:
+    image: redis:7.0-alpine
+    ports:
+      - "6379:6379"
+
+  cassandra:
+    image: cassandra:4.0
+    ports:
+      - "9042:9042"
+    environment:
+      - CASSANDRA_CLUSTER_NAME=agent360_cluster
+
+  redpanda:
+    image: redpandadata/redpanda:latest
+    ports:
+      - "9092:9092"
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 1G
+
+  temporal:
+    image: temporalio/server:latest
+    ports:
+      - "7233:7233"
+    environment:
+      - CASSANDRA_SEEDS=cassandra
+    depends_on:
+      - cassandra
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards

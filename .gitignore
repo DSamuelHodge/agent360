@@ -50,11 +50,14 @@ junit.xml
 pytest-report.html
 coverage/
 .coverage.*
+.coveragerc
 cov.xml
 .benchmarks/
 prof/
 *.prof
 .pytest.restart
+.pytest.ini
+requirements-test.txt
 
 # Virtual Environment
 venv/
