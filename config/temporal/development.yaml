@@ -1,0 +1,35 @@
+persistence:
+  defaultStore: default
+  visibilityStore: visibility
+  numHistoryShards: 1
+  datastores:
+    default:
+      cassandra:
+        hosts: ["cassandra"]
+        keyspace: "temporal"
+        user: ""
+        password: ""
+        port: 9042
+        datacenter: "datacenter1"
+        maxConns: 2
+        connectTimeout: 5s
+    visibility:
+      cassandra:
+        hosts: ["cassandra"]
+        keyspace: "temporal_visibility"
+        user: ""
+        password: ""
+        port: 9042
+        datacenter: "datacenter1"
+        maxConns: 2
+        connectTimeout: 5s
+
+global:
+  membership:
+    maxJoinDuration: 30s
+  pprof:
+    port: 7936
+  metrics:
+    prometheus:
+      timerType: "histogram"
+      listenAddress: "0.0.0.0:9090"

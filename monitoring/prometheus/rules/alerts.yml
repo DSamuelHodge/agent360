@@ -1,0 +1,38 @@
+groups:
+- name: Agent360Alerts
+  rules:
+  - alert: HighRequestLatency
+    expr: rate(http_request_duration_seconds_sum[5m]) / rate(http_request_duration_seconds_count[5m]) > 0.5
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High request latency on {{$labels.instance}}"
+      description: "Request latency is above 500ms (current value: {{$value}}s)"
+
+  - alert: HighErrorRate
+    expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High error rate on {{$labels.instance}}"
+      description: "Error rate is above 5% (current value: {{$value}})"
+
+  - alert: RedisDown
+    expr: redis_up == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Redis instance down on {{$labels.instance}}"
+      description: "Redis instance has been down for more than 1 minute"
+
+  - alert: CassandraDown
+    expr: cassandra_up == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Cassandra instance down on {{$labels.instance}}"
+      description: "Cassandra instance has been down for more than 1 minute"

@@ -1,0 +1,22 @@
+server:
+  port: 8080
+  readTimeout: 15
+  writeTimeout: 15
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+cassandra:
+  hosts: ["cassandra:9042"]
+  keyspace: "agent360"
+  consistency: "quorum"
+
+temporal:
+  hostPort: "temporal:7233"
+  namespace: "agent360"
+
+logging:
+  level: "info"
+  encoding: "json"

@@ -1,0 +1,108 @@
+log:
+  stdout: true
+  level: info
+
+persistence:
+  defaultStore: default
+  visibilityStore: visibility
+  numHistoryShards: 1
+  datastores:
+    default:
+      cassandra:
+        hosts: ["{{ .Env.CASSANDRA_SEEDS }}"]
+        keyspace: "temporal"
+        user: ""
+        password: ""
+        port: 9042
+        datacenter: "datacenter1"
+        maxConns: 2
+        connectTimeout: 5s
+    visibility:
+      cassandra:
+        hosts: ["{{ .Env.CASSANDRA_SEEDS }}"]
+        keyspace: "temporal_visibility"
+        user: ""
+        password: ""
+        port: 9042
+        datacenter: "datacenter1"
+        maxConns: 2
+        connectTimeout: 5s
+
+global:
+  membership:
+    maxJoinDuration: 30s
+  pprof:
+    port: 7936
+  metrics:
+    prometheus:
+      timerType: "histogram"
+      listenAddress: "{{ .Env.TEMPORAL_PROMETHEUS_ENDPOINT }}"
+
+services:
+  frontend:
+    rpc:
+      grpcPort: 7233
+      bindOnIP: "{{ .Env.TEMPORAL_BROADCAST_ADDRESS }}"
+      membershipPort: 6933
+    metrics:
+      prometheus:
+        timerType: "histogram"
+        listenAddress: "{{ .Env.TEMPORAL_PROMETHEUS_ENDPOINT }}"
+
+  matching:
+    rpc:
+      grpcPort: 7235
+      bindOnIP: "{{ .Env.TEMPORAL_BROADCAST_ADDRESS }}"
+      membershipPort: 6935
+    metrics:
+      prometheus:
+        timerType: "histogram"
+        listenAddress: "{{ .Env.TEMPORAL_PROMETHEUS_ENDPOINT }}"
+
+  history:
+    rpc:
+      grpcPort: 7234
+      bindOnIP: "{{ .Env.TEMPORAL_BROADCAST_ADDRESS }}"
+      membershipPort: 6934
+    metrics:
+      prometheus:
+        timerType: "histogram"
+        listenAddress: "{{ .Env.TEMPORAL_PROMETHEUS_ENDPOINT }}"
+
+  worker:
+    rpc:
+      grpcPort: 7239
+      bindOnIP: "{{ .Env.TEMPORAL_BROADCAST_ADDRESS }}"
+      membershipPort: 6939
+    metrics:
+      prometheus:
+        timerType: "histogram"
+        listenAddress: "{{ .Env.TEMPORAL_PROMETHEUS_ENDPOINT }}"
+
+clusterMetadata:
+  enableGlobalNamespace: false
+  failoverVersionIncrement: 10
+  masterClusterName: "active"
+  currentClusterName: "active"
+  clusterInformation:
+    active:
+      enabled: true
+      initialFailoverVersion: 1
+      rpcName: "temporal"
+      rpcAddress: "{{ .Env.TEMPORAL_BROADCAST_ADDRESS }}:7233"
+
+dcRedirectionPolicy:
+  policy: "noop"
+  toDC: ""
+
+archival:
+  history:
+    state: "disabled"
+    enableRead: false
+    provider:
+      filestore:
+        fileMode: "0666"
+        dirMode: "0766"
+  visibility:
+    state: "disabled"
+    enableRead: false

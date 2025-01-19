@@ -1,0 +1,26 @@
+frontend.enableClientVersionCheck:
+  - value: true
+frontend.workerVersionChecker:
+  - value:
+      checkVersion: true
+      versionConstraint: ">0.0.1"
+system.enableReadVisibilityFromES:
+  - value: false
+system.enableReadFromSecondaryAdvanced:
+  - value: false
+history.persistenceMaxQPS:
+  - value: 3000
+frontend.persistenceMaxQPS:
+  - value: 3000
+frontend.historyMgrNumConns:
+  - value: 10
+frontend.throttledLogRPS:
+  - value: 20
+history.historyMgrNumConns:
+  - value: 50
+history.defaultActivityRetryPolicy:
+  - value:
+      InitialIntervalInSeconds: 1
+      MaximumIntervalCoefficient: 100.0
+      BackoffCoefficient: 2.0
+      MaximumAttempts: 0

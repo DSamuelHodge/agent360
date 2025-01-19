@@ -1,34 +1,59 @@
-version: '3.8'
 services:
-  agent360-api:
+  agent360:
+    container_name: agent360
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/your-org/agent360:latest
+    image: agent360:latest
     ports:
-      - "8080:8080"
+      - "8081:8080"
+      - "8082:8082"
     environment:
       - REDIS_HOST=redis
       - CASSANDRA_HOST=cassandra
-      - KAFKA_BROKERS=redpanda:9092
-      - TEMPORAL_HOST=temporal
+      - TEMPORAL_HOST=temporal:7233
+      - METRICS_PORT=8082
     depends_on:
       - redis
       - cassandra
-      - redpanda
       - temporal
+      - prometheus
+    networks:
+      - agent360_default
 
   redis:
-    image: redis:7.0-alpine
+    image: redis:latest
+    container_name: redis
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf
     ports:
       - "6379:6379"
+    networks:
+      - agent360_default
 
   cassandra:
     image: cassandra:4.0
     ports:
       - "9042:9042"
+      - "7199:7199"
     environment:
       - CASSANDRA_CLUSTER_NAME=agent360_cluster
+    networks:
+      - agent360_default
+
+  cassandra-exporter:
+    image: bitnami/cassandra-exporter:latest
+    container_name: cassandra-exporter
+    environment:
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=7199
+    ports:
+      - "9500:9500"
+    networks:
+      - agent360_default
+    depends_on:
+      - cassandra
 
   redpanda:
     image: redpandadata/redpanda:latest
@@ -40,13 +65,27 @@ services:
       - --memory 1G
 
   temporal:
-    image: temporalio/server:latest
-    ports:
-      - "7233:7233"
-    environment:
-      - CASSANDRA_SEEDS=cassandra
+    image: temporalio/auto-setup:latest
+    container_name: temporal
     depends_on:
       - cassandra
+    environment:
+      - CASSANDRA_SEEDS=cassandra
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_BROADCAST_ADDRESS=0.0.0.0
+      - TEMPORAL_METRICS_PORT=8000
+      - TEMPORAL_PROMETHEUS_ENDPOINT=0.0.0.0:8000
+      - SERVICES=history:matching:frontend:worker
+      - SKIP_SCHEMA_SETUP=false
+      - SKIP_DEFAULT_NAMESPACE_CREATION=false
+      - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development.yaml
+    volumes:
+      - ./config/temporal:/etc/temporal/config
+    ports:
+      - "7233:7233"
+      - "8000:8000"
+    networks:
+      - agent360_default
 
   grafana:
     image: grafana/grafana:latest
@@ -54,3 +93,40 @@ services:
       - "3000:3000"
     volumes:
       - ./monitoring/grafana/dashboards:/etc/grafana/dashboards
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter
+    command: --redis.addr=redis://redis:6379
+    ports:
+      - "9121:9121"
+    networks:
+      - agent360_default
+    depends_on:
+      - redis
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - agent360_default
+    restart: unless-stopped
+
+networks:
+  agent360_default:
+    driver: bridge
+
+volumes:
+  prometheus_data: {}
